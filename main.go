@@ -53,6 +53,9 @@ type PodStatuses struct {
 
 func main() {
 	http.HandleFunc("/status", statusHandler)
+	http.HandleFunc("/healthz", healthzHandler)
+	http.HandleFunc("/ready", readyHandler)
+	
 	log.Println("Server starting on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
@@ -316,4 +319,15 @@ func getPodStatuses() (PodStatuses, error) {
 func formatUptime(duration time.Duration) string {
 	days := duration.Hours() / 24
 	return fmt.Sprintf("%.2f days", math.Floor(days*100)/100)
+}
+
+func healthzHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
+
+func readyHandler(w http.ResponseWriter, r *http.Request) {
+	// место под проверку интеграций
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Ready"))
 }

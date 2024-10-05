@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cluster-status
+  namespace: cluster-status
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  ingressClassName: nginx  
+  tls:
+  - hosts:
+    - status.vakaf.space
+    secretName: cluster-status-tls
+  rules:
+  - host: status.vakaf.space
+    http:
+      paths:
+      - path: /status
+        pathType: Prefix
+        backend:
+          service:
+            name: cluster-status
+            port:
+              number: 8080
