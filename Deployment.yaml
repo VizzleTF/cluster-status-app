@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: cluster-status-app
-        image: ghcr.io/yourusername/cluster-status-app:latest
+        image: ghcr.io/vizzletf/cluster-status-app:latest
         ports:
         - containerPort: 8080
         env:
