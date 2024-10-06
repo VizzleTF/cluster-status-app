@@ -95,6 +95,9 @@ func initConfig() {
     if err != nil {
         log.Fatalf("Fatal error config file: %s", err)
     }
+	viper.Set("redis.password", os.Getenv("REDIS_PASSWORD"))
+    viper.Set("proxmox.username", os.Getenv("PROXMOX_USERNAME"))
+    viper.Set("proxmox.password", os.Getenv("PROXMOX_PASSWORD"))
 }
 
 func initRedis() {
