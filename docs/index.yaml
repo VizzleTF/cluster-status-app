@@ -2,8 +2,18 @@ apiVersion: v1
 entries:
   cluster-status-app:
   - apiVersion: v2
+    appVersion: 1.16.6
+    created: "2024-10-06T11:41:48.042349472Z"
+    description: A Helm chart for Cluster Status App
+    digest: b641ff9735c3a574f483c6cbe28b6bbce27d12967aca10acaecdea25320f2f07
+    name: cluster-status-app
+    type: application
+    urls:
+    - https://vizzletf.github.io/cluster-status-app/cluster-status-app-0.2.7.tgz
+    version: 0.2.7
+  - apiVersion: v2
     appVersion: 1.16.5
-    created: "2024-10-06T11:36:11.230439443Z"
+    created: "2024-10-06T11:41:48.041897378Z"
     description: A Helm chart for Cluster Status App
     digest: 8162234b41e4374de7931e59552e1da30f4484ae9c4f90cda41baaadc06999b5
     name: cluster-status-app
@@ -13,7 +23,7 @@ entries:
     version: 0.2.6
   - apiVersion: v2
     appVersion: 1.16.4
-    created: "2024-10-06T11:36:11.23000488Z"
+    created: "2024-10-06T11:41:48.041481111Z"
     description: A Helm chart for Cluster Status App
     digest: 19ba61e08c7919669c9375ee09b63737e574ba706117044222f873c8e085e5d9
     name: cluster-status-app
@@ -23,7 +33,7 @@ entries:
     version: 0.2.5
   - apiVersion: v2
     appVersion: 1.16.4
-    created: "2024-10-06T11:36:11.229528529Z"
+    created: "2024-10-06T11:41:48.041029737Z"
     description: A Helm chart for Cluster Status App
     digest: 38d206c343f5772b09866e3bfa4d568b02575a5089a6a15029895ba7c867e61c
     name: cluster-status-app
@@ -33,7 +43,7 @@ entries:
     version: 0.2.4
   - apiVersion: v2
     appVersion: 1.16.3
-    created: "2024-10-06T11:36:11.228550807Z"
+    created: "2024-10-06T11:41:48.040614532Z"
     description: A Helm chart for Cluster Status App
     digest: c5194e119ca29a345268c8766f810558b61899de9cb5185d495a94c438883d2a
     name: cluster-status-app
@@ -43,7 +53,7 @@ entries:
     version: 0.2.3
   - apiVersion: v2
     appVersion: 1.16.2
-    created: "2024-10-06T11:36:11.227933092Z"
+    created: "2024-10-06T11:41:48.040202813Z"
     description: A Helm chart for Cluster Status App
     digest: b3cf1cfed4e8e9cc45c90c1b64a5bf3a5b0c49801c5a7b4eab7b617ec38be79f
     name: cluster-status-app
@@ -53,7 +63,7 @@ entries:
     version: 0.2.2
   - apiVersion: v2
     appVersion: 1.16.1
-    created: "2024-10-06T11:36:11.227507937Z"
+    created: "2024-10-06T11:41:48.039769153Z"
     description: A Helm chart for Cluster Status App
     digest: 0b48b7ba4e2e10a079112185131024aa182568f551f41605d67b2f6b72ccb693
     name: cluster-status-app
@@ -63,7 +73,7 @@ entries:
     version: 0.2.1
   - apiVersion: v2
     appVersion: 1.16.0
-    created: "2024-10-06T11:36:11.227100003Z"
+    created: "2024-10-06T11:41:48.03936055Z"
     description: A Helm chart for Cluster Status App
     digest: e8246f861a8607b47f7819b5099042a25682f537eaf688d9e92ed382bc677d30
     name: cluster-status-app
@@ -73,7 +83,7 @@ entries:
     version: 0.2.0
   - apiVersion: v2
     appVersion: 1.16.0
-    created: "2024-10-06T11:36:11.226645052Z"
+    created: "2024-10-06T11:41:48.038919466Z"
     description: A Helm chart for Cluster Status App
     digest: 96d37a9ca8d23138a44b4dfa15341ee33956812176169607573ce0322c46af8c
     name: cluster-status-app
@@ -83,7 +93,7 @@ entries:
     version: 0.1.6
   - apiVersion: v2
     appVersion: 1.16.0
-    created: "2024-10-06T11:36:11.226269209Z"
+    created: "2024-10-06T11:41:48.038549004Z"
     description: A Helm chart for Cluster Status App
     digest: 2b429064a878794e2ae9cfcf8e90a7c34ed8af8ee8d84ced27e7da2c423a5f44
     name: cluster-status-app
@@ -93,7 +103,7 @@ entries:
     version: 0.1.5
   - apiVersion: v2
     appVersion: 1.16.0
-    created: "2024-10-06T11:36:11.225877367Z"
+    created: "2024-10-06T11:41:48.038173302Z"
     description: A Helm chart for Cluster Status App
     digest: 63d2c4a2a3630d8f68af45f6212a6eac87ef9576ae26df3ed227d30e43fe41bd
     name: cluster-status-app
@@ -103,7 +113,7 @@ entries:
     version: 0.1.4
   - apiVersion: v2
     appVersion: 1.16.0
-    created: "2024-10-06T11:36:11.225469905Z"
+    created: "2024-10-06T11:41:48.037783855Z"
     description: A Helm chart for Cluster Status App
     digest: 0a5b48647778d76ac38abe083a2e0c972fa64b890a690afad430cc3c13b1690c
     name: cluster-status-app
@@ -113,7 +123,7 @@ entries:
     version: 0.1.3
   - apiVersion: v2
     appVersion: 1.16.0
-    created: "2024-10-06T11:36:11.2250985Z"
+    created: "2024-10-06T11:41:48.037399888Z"
     description: A Helm chart for Cluster Status App
     digest: 9cf81e0724e96b9dbe8d22f4d08bdde22039a0c3b2572bf8d6e73fe1c8f6dc9a
     name: cluster-status-app
@@ -123,7 +133,7 @@ entries:
     version: 0.1.2
   - apiVersion: v2
     appVersion: 1.16.0
-    created: "2024-10-06T11:36:11.224679797Z"
+    created: "2024-10-06T11:41:48.036983831Z"
     description: A Helm chart for Kubernetes
     digest: 6d2e674ccb68a009e185b8cf1ecf6fa46244583ee2bb27b09b497bb71292f345
     name: cluster-status-app
@@ -133,7 +143,7 @@ entries:
     version: 0.1.1
   - apiVersion: v2
     appVersion: 1.16.0
-    created: "2024-10-06T11:36:11.224265512Z"
+    created: "2024-10-06T11:41:48.036580898Z"
     description: A Helm chart for Kubernetes
     digest: ecf439d57c2bdf107913929848e9f56db73d0218d832d582397a7deeaeefa055
     name: cluster-status-app
@@ -141,4 +151,4 @@ entries:
     urls:
     - https://vizzletf.github.io/cluster-status-app/cluster-status-app-0.1.0.tgz
     version: 0.1.0
-generated: "2024-10-06T11:36:11.223696918Z"
+generated: "2024-10-06T11:41:48.036013278Z"
