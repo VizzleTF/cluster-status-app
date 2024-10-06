@@ -3,12 +3,12 @@ entries:
   cluster-status-app:
   - apiVersion: v2
     appVersion: 1.16.0
-    created: "2024-10-06T07:47:29.281662128Z"
+    created: "2024-10-06T07:52:21.251498378Z"
     description: A Helm chart for Kubernetes
-    digest: 41cc41ef1ce000c39ade0ee3d740d67d81c45dd7b8f5774e40469ccbf059b457
+    digest: ecf439d57c2bdf107913929848e9f56db73d0218d832d582397a7deeaeefa055
     name: cluster-status-app
     type: application
     urls:
     - https://vizzletf.github.io/cluster-status-app/cluster-status-app-0.1.0.tgz
     version: 0.1.0
-generated: "2024-10-06T07:47:29.281118111Z"
+generated: "2024-10-06T07:52:21.250929033Z"
