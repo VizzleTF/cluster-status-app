@@ -134,13 +134,13 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	podStatusesRaw, err := getDataWithCache("pod_statuses", func() (interface{}, error) {
-		return getPodStatuses()
-	})
-	if err != nil {
-		http.Error(w, "Failed to get pod statuses: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+    podStatusesRaw, err := getDataWithCache("pod_statuses", func() (interface{}, error) {
+        return getPodStatuses()
+    })
+    if err != nil {
+        http.Error(w, "Failed to get pod statuses: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
 
 	// Правильное преобразование типов
 	helmReleases, err := convertToHelmReleases(helmReleasesRaw)
@@ -164,12 +164,12 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	podStatuses, ok := podStatusesRaw.(PodStatuses)
-	if !ok {
-		log.Printf("Failed to convert podStatusesRaw to PodStatuses: %v", podStatusesRaw)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+    podStatuses, err := convertToPodStatuses(podStatusesRaw)
+    if err != nil {
+        log.Printf("Failed to convert podStatusesRaw to PodStatuses: %v", err)
+        http.Error(w, "Internal server error", http.StatusInternalServerError)
+        return
+    }
 
 	response := struct {
 		HelmReleases []HelmRelease `json:"helmReleases"`
@@ -264,6 +264,23 @@ func convertToProxmoxNodes(data interface{}) ([]ProxmoxNode, error) {
 	default:
 		return nil, fmt.Errorf("unsupported type: %T", data)
 	}
+}
+
+func convertToPodStatuses(data interface{}) (PodStatuses, error) {
+    switch v := data.(type) {
+    case map[string]interface{}:
+        return PodStatuses{
+            Running:   int(v["Running"].(float64)),
+            Pending:   int(v["Pending"].(float64)),
+            Failed:    int(v["Failed"].(float64)),
+            Succeeded: int(v["Succeeded"].(float64)),
+            Unknown:   int(v["Unknown"].(float64)),
+        }, nil
+    case PodStatuses:
+        return v, nil
+    default:
+        return PodStatuses{}, fmt.Errorf("unsupported type: %T", data)
+    }
 }
 
 func getDataWithCache(cacheKey string, getData func() (interface{}, error)) (interface{}, error) {
