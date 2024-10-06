@@ -93,12 +93,58 @@ func initConfig() {
     config.AddConfigPath("/etc/myapp/")
     err := config.ReadInConfig()
     if err != nil {
-        log.Fatalf("Fatal error config file: %s", err)
+        log.Printf("Warning: Could not read config file: %s", err)
     }
-	viper.Set("redis.password", os.Getenv("REDIS_PASSWORD"))
-    viper.Set("proxmox.username", os.Getenv("PROXMOX_USERNAME"))
-    viper.Set("proxmox.password", os.Getenv("PROXMOX_PASSWORD"))
+
+    // Переопределение значений из переменных окружения
+    config.SetEnvPrefix("MYAPP")
+    config.AutomaticEnv()
+
+    // Явное связывание ключей конфигурации с переменными окружения
+    config.BindEnv("proxmox.apiUrl", "PROXMOX_API_URL")
+    config.BindEnv("proxmox.username", "PROXMOX_USER")
+    config.BindEnv("proxmox.password", "PROXMOX_PASSWORD")
+    config.BindEnv("proxmox.insecureSkipVerify", "PROXMOX_INSECURE_SKIP_VERIFY")
+    config.BindEnv("proxmox.taskTimeout", "PROXMOX_TASK_TIMEOUT")
+
+    // Логирование значений конфигурации (будьте осторожны с конфиденциальными данными)
+    log.Printf("Proxmox API URL: %s", config.GetString("proxmox.apiUrl"))
+    log.Printf("Proxmox Username: %s", config.GetString("proxmox.username"))
+    log.Printf("Proxmox InsecureSkipVerify: %v", config.GetBool("proxmox.insecureSkipVerify"))
+    log.Printf("Proxmox Task Timeout: %v", config.GetDuration("proxmox.taskTimeout"))
 }
+
+func initProxmoxClient() {
+    tlsConfig := &tls.Config{InsecureSkipVerify: config.GetBool("proxmox.insecureSkipVerify")}
+    
+    // Получаем значение тайм-аута из конфигурации или переменной окружения
+    taskTimeoutStr := os.Getenv("PROXMOX_TASK_TIMEOUT")
+    if taskTimeoutStr == "" {
+        taskTimeoutStr = config.GetString("proxmox.taskTimeout")
+    }
+    
+    var err error
+    proxmoxClient, err = pxapi.NewClient(
+        config.GetString("proxmox.apiUrl"),
+        nil,
+        "",
+        tlsConfig,
+        taskTimeoutStr,
+        config.GetInt("proxmox.vsmDomainType"),
+    )
+    if err != nil {
+        log.Fatalf("Failed to create Proxmox client: %v", err)
+    }
+
+    err = proxmoxClient.Login(config.GetString("proxmox.username"), config.GetString("proxmox.password"), "")
+    if err != nil {
+        log.Fatalf("Failed to login to Proxmox: %v", err)
+    }
+
+    log.Printf("Proxmox client initialized with task timeout: %s", taskTimeoutStr)
+}
+
+
 
 func initRedis() {
     redisClient = redis.NewClient(&redis.Options{
@@ -129,26 +175,6 @@ func initKubernetesClient() {
     }
 }
 
-func initProxmoxClient() {
-    tlsConfig := &tls.Config{InsecureSkipVerify: config.GetBool("proxmox.insecureSkipVerify")}
-    var err error
-    proxmoxClient, err = pxapi.NewClient(
-        config.GetString("proxmox.apiUrl"),
-        nil,
-        "",
-        tlsConfig,
-        config.GetString("proxmox.taskTimeout"),
-        config.GetInt("proxmox.vsmDomainType"),
-    )
-    if err != nil {
-        log.Fatalf("Failed to create Proxmox client: %v", err)
-    }
-
-    err = proxmoxClient.Login(config.GetString("proxmox.username"), config.GetString("proxmox.password"), "")
-    if err != nil {
-        log.Fatalf("Failed to login to Proxmox: %v", err)
-    }
-}
 
 func statusHandler(w http.ResponseWriter, r *http.Request) {
     ctx, cancel := context.WithTimeout(r.Context(), config.GetDuration("handler.timeout"))
@@ -493,14 +519,18 @@ func updateKubernetesConfig() {
 }
 
 func updateProxmoxConfig() {
-    // Обновление настроек Proxmox
     tlsConfig := &tls.Config{InsecureSkipVerify: config.GetBool("proxmox.insecureSkipVerify")}
+    taskTimeoutStr := os.Getenv("PROXMOX_TASK_TIMEOUT")
+    if taskTimeoutStr == "" {
+        taskTimeoutStr = config.GetString("proxmox.taskTimeout")
+    }
+    
     newClient, err := pxapi.NewClient(
         config.GetString("proxmox.apiUrl"),
         nil,
         "",
         tlsConfig,
-        config.GetString("proxmox.taskTimeout"),
+        taskTimeoutStr,
         config.GetInt("proxmox.vsmDomainType"),
     )
     if err != nil {
@@ -513,6 +543,7 @@ func updateProxmoxConfig() {
         return
     }
     proxmoxClient = newClient
+    log.Printf("Proxmox client updated with task timeout: %s", taskTimeoutStr)
 }
 
 // Функция для логирования ошибок с дополнительным контекстом
