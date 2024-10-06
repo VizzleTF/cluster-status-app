@@ -145,3 +145,5 @@ config:
   logging:
     level: "info"
     format: "json"
+  cache:
+    ttl: 10s
