@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cluster-status-app.fullname" . }}-config
+  labels:
+    {{- include "cluster-status-app.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    server:
+      port: {{ .Values.config.server.port }}
+      readTimeout: {{ .Values.config.server.readTimeout }}
+      writeTimeout: {{ .Values.config.server.writeTimeout }}
+      idleTimeout: {{ .Values.config.server.idleTimeout }}
+    redis:
+      addr: "{{ .Release.Name }}-redis:6379"
+      poolSize: {{ .Values.config.redis.poolSize }}
+    kubernetes:
+      config: {{ .Values.config.kubernetes.config }}
+    proxmox:
+      apiUrl: "$(PROXMOX_API_URL)"
+      username: "$(PROXMOX_USER)"
+      password: "$(PROXMOX_PASSWORD)"
+      insecureSkipVerify: {{ .Values.config.proxmox.insecureSkipVerify }}
+      taskTimeout: {{ .Values.config.proxmox.taskTimeout }}
+      vsmDomainType: {{ .Values.config.proxmox.vsmDomainType }}
+    workerPool:
+      size: {{ .Values.config.workerPool.size }}
+    cache:
+      helmReleasesTTL: {{ .Values.config.cache.helmReleasesTTL }}
+      nodeStatusesTTL: {{ .Values.config.cache.nodeStatusesTTL }}
+      proxmoxNodesTTL: {{ .Values.config.cache.proxmoxNodesTTL }}
+      podStatusesTTL: {{ .Values.config.cache.podStatusesTTL }}
+    handler:
+      timeout: {{ .Values.config.handler.timeout }}
+    logging:
+      level: {{ .Values.config.logging.level }}
+      format: {{ .Values.config.logging.format }}

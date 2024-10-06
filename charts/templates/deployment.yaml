@@ -25,6 +25,9 @@ spec:
           env:
             {{- toYaml .Values.env | nindent 12 }}
           volumeMounts:
+            - name: config
+              mountPath: /etc/myapp
+              readOnly: true
             {{- toYaml .Values.volumeMounts | nindent 12 }}
           livenessProbe:
             {{- toYaml .Values.probes.liveness | nindent 12 }}
@@ -33,6 +36,9 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
+        - name: config
+          configMap:
+            name: {{ include "cluster-status-app.fullname" . }}-config
         {{- toYaml .Values.volumes | nindent 8 }}
       affinity:
         {{- toYaml .Values.affinity | nindent 8 }}

@@ -1,0 +1,50 @@
+# Настройки сервера
+server:
+  port: 8080
+  readTimeout: 5s
+  writeTimeout: 10s
+  idleTimeout: 15s
+
+# Настройки Redis
+redis:
+  addr: "localhost:6379"
+  password: ""  # Оставьте пустым, если аутентификация не требуется
+  db: 0
+  poolSize: 100
+
+# Настройки Kubernetes
+kubernetes:
+  config: "/Users/ivan/.kube/config"  # Путь к файлу kubeconfig
+
+# Настройки Proxmox
+proxmox:
+  apiUrl: "https://10.11.12.51:8006/api2/json"
+  username: "root@pam"
+  password: "300124"
+  insecureSkipVerify: true  # Установите true только для тестирования
+  taskTimeout: "300s"
+  vsmDomainType: 1  # может быть 0 или 1 в зависимости от версии Proxmox
+
+# Настройки пула воркеров
+workerPool:
+  size: 10
+
+# Настройки кэширования
+cache:
+  helmReleasesTTL: 300s  # 5 минут
+  nodeStatusesTTL: 60s   # 1 минута
+  proxmoxNodesTTL: 120s  # 2 минуты
+  podStatusesTTL: 30s    # 30 секунд
+
+# Настройки обработчиков
+handler:
+  timeout: 30s
+
+# Настройки логирования
+logging:
+  level: "info"  # Допустимые значения: debug, info, warn, error
+  format: "json" # Допустимые значения: json, text
+
+# Дополнительные настройки (если требуются)
+# example:
+#   key: value

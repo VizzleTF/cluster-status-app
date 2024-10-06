@@ -1,472 +1,525 @@
 package main
 
 import (
-	"context"
-	"crypto/tls"
-	"fmt"
-	"log"
-	"math"
-	"net/http"
-	"os"
-	"strconv"
-	"sync"
-	"time"
+    "context"
+    "crypto/tls"
+    "encoding/json"
+    "fmt"
+    "log"
+    "math"
+    "net/http"
+    "os"
+    "sync"
+    "time"
 
-	pxapi "github.com/Telmate/proxmox-api-go/proxmox"
-	"github.com/go-redis/redis/v8"
-	jsoniter "github.com/json-iterator/go"
-	"github.com/NYTimes/gziphandler"
-	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/cli"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
+    pxapi "github.com/Telmate/proxmox-api-go/proxmox"
+    "github.com/fsnotify/fsnotify"
+    "github.com/go-redis/redis/v8"
+    "github.com/spf13/viper"
+    "golang.org/x/sync/errgroup"
+    "helm.sh/helm/v3/pkg/action"
+    "helm.sh/helm/v3/pkg/cli"
+    corev1 "k8s.io/api/core/v1"
+    metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+    "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/tools/clientcmd"
 )
 
 type HelmRelease struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-	Chart     string `json:"chart"`
-	Version   string `json:"version"`
-	Status    string `json:"status"`
+    Name      string `json:"name"`
+    Namespace string `json:"namespace"`
+    Chart     string `json:"chart"`
+    Version   string `json:"version"`
+    Status    string `json:"status"`
 }
 
 type NodeStatus struct {
-	Name       string   `json:"name"`
-	Status     string   `json:"status"`
-	Roles      []string `json:"roles"`
-	Version    string   `json:"version"`
-	InternalIP string   `json:"internalIP"`
-	Uptime     string   `json:"uptime"`
+    Name       string   `json:"name"`
+    Status     string   `json:"status"`
+    Roles      []string `json:"roles"`
+    Version    string   `json:"version"`
+    InternalIP string   `json:"internalIP"`
+    Uptime     string   `json:"uptime"`
 }
 
 type ProxmoxNode struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Uptime string `json:"uptime"`
+    Name   string `json:"name"`
+    Status string `json:"status"`
+    Uptime string `json:"uptime"`
 }
 
 type PodStatuses struct {
-	Running   int `json:"Running"`
-	Pending   int `json:"Pending"`
-	Failed    int `json:"Failed"`
-	Succeeded int `json:"Succeeded"`
-	Unknown   int `json:"Unknown"`
+    Running   int `json:"Running"`
+    Pending   int `json:"Pending"`
+    Failed    int `json:"Failed"`
+    Succeeded int `json:"Succeeded"`
+    Unknown   int `json:"Unknown"`
 }
 
 var (
-	redisClient *redis.Client
-	ctx         = context.Background()
-	useRedis    bool
-	cacheTTL    time.Duration
-	jsonAPI     = jsoniter.ConfigCompatibleWithStandardLibrary
+    redisClient   *redis.Client
+    ctx           = context.Background()
+    k8sClient     *kubernetes.Clientset
+    proxmoxClient *pxapi.Client
+    config        *viper.Viper
 )
 
 func main() {
-	initRedis()
+    initConfig()
+    initRedis()
+    initKubernetesClient()
+    initProxmoxClient()
+    updateConfig() // Добавляем вызов функции для отслеживания изменений конфигурации
 
-	http.Handle("/status", gziphandler.GzipHandler(http.HandlerFunc(statusHandler)))
-	http.HandleFunc("/healthz", healthzHandler)
-	http.HandleFunc("/ready", readyHandler)
-	
-	server := &http.Server{
-		Addr:         ":8080",
-		Handler:      nil, // uses http.DefaultServeMux
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  15 * time.Second,
-	}
+    http.HandleFunc("/status", statusHandler)
+    http.HandleFunc("/healthz", healthzHandler)
+    http.HandleFunc("/ready", readyHandler)
+    
+    server := &http.Server{
+        Addr:         fmt.Sprintf(":%d", config.GetInt("server.port")),
+        ReadTimeout:  config.GetDuration("server.readTimeout"),
+        WriteTimeout: config.GetDuration("server.writeTimeout"),
+        IdleTimeout:  config.GetDuration("server.idleTimeout"),
+    }
 
-	log.Println("Server starting on :8080")
-	log.Fatal(server.ListenAndServe())
+    log.Printf("Server starting on %s", server.Addr)
+    log.Fatal(server.ListenAndServe())
+}
+
+func initConfig() {
+    config = viper.New()
+    config.SetConfigName("config")
+    config.SetConfigType("yaml")
+    config.AddConfigPath("/etc/myapp/")
+    err := config.ReadInConfig()
+    if err != nil {
+        log.Fatalf("Fatal error config file: %s", err)
+    }
 }
 
 func initRedis() {
-	redisEnabled, _ := strconv.ParseBool(os.Getenv("REDIS_ENABLED"))
-	if !redisEnabled {
-		useRedis = false
-		log.Println("Redis is disabled")
-		return
-	}
+    redisClient = redis.NewClient(&redis.Options{
+        Addr:     config.GetString("redis.addr"),
+        Password: config.GetString("redis.password"),
+        DB:       config.GetInt("redis.db"),
+        PoolSize: config.GetInt("redis.poolSize"),
+    })
 
-	redisHost := os.Getenv("REDIS_HOST")
-	redisPort := os.Getenv("REDIS_PORT")
-	if redisHost == "" || redisPort == "" {
-		log.Println("REDIS_HOST or REDIS_PORT environment variable is not set, disabling Redis")
-		useRedis = false
-		return
-	}
+    _, err := redisClient.Ping(ctx).Result()
+    if err != nil {
+        log.Fatalf("Failed to connect to Redis: %v", err)
+    }
+    
+    log.Println("Connected to Redis successfully")
+}
 
-	ttl, err := strconv.Atoi(os.Getenv("REDIS_TTL"))
-	if err != nil {
-		log.Println("Invalid REDIS_TTL, using default of 10 seconds")
-		ttl = 10
-	}
-	cacheTTL = time.Duration(ttl) * time.Second
+func initKubernetesClient() {
+    kubeconfig := config.GetString("kubernetes.config")
+    config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+    if err != nil {
+        log.Fatalf("Failed to build Kubernetes config: %v", err)
+    }
 
-	redisClient = redis.NewClient(&redis.Options{
-		Addr: fmt.Sprintf("%s:%s", redisHost, redisPort),
-		PoolSize: 100, // Adjust this value based on your needs
-	})
+    k8sClient, err = kubernetes.NewForConfig(config)
+    if err != nil {
+        log.Fatalf("Failed to create Kubernetes client: %v", err)
+    }
+}
 
-	_, err = redisClient.Ping(ctx).Result()
-	if err != nil {
-		log.Printf("Failed to connect to Redis: %v, disabling Redis", err)
-		useRedis = false
-		return
-	}
-	
-	useRedis = true
-	log.Println("Connected to Redis successfully")
+func initProxmoxClient() {
+    tlsConfig := &tls.Config{InsecureSkipVerify: config.GetBool("proxmox.insecureSkipVerify")}
+    var err error
+    proxmoxClient, err = pxapi.NewClient(
+        config.GetString("proxmox.apiUrl"),
+        nil,
+        "",
+        tlsConfig,
+        config.GetString("proxmox.taskTimeout"),
+        config.GetInt("proxmox.vsmDomainType"),
+    )
+    if err != nil {
+        log.Fatalf("Failed to create Proxmox client: %v", err)
+    }
+
+    err = proxmoxClient.Login(config.GetString("proxmox.username"), config.GetString("proxmox.password"), "")
+    if err != nil {
+        log.Fatalf("Failed to login to Proxmox: %v", err)
+    }
 }
 
 func statusHandler(w http.ResponseWriter, r *http.Request) {
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	results := make(map[string]interface{})
-	errChan := make(chan error, 4)
+    ctx, cancel := context.WithTimeout(r.Context(), config.GetDuration("handler.timeout"))
+    defer cancel()
 
-	wg.Add(4)
-	go func() {
-		defer wg.Done()
-		helmReleasesRaw, err := getDataWithCache("helm_releases", func() (interface{}, error) {
-			return getHelmReleases()
-		})
-		mu.Lock()
-		results["helmReleases"] = helmReleasesRaw
-		mu.Unlock()
-		if err != nil {
-			errChan <- err
-		}
-	}()
+    var (
+        mu      sync.Mutex
+        results = make(map[string]interface{})
+        g, _    = errgroup.WithContext(ctx)
+    )
 
-	go func() {
-		defer wg.Done()
-		nodeStatusesRaw, err := getDataWithCache("node_statuses", func() (interface{}, error) {
-			return getNodeStatuses()
-		})
-		mu.Lock()
-		results["nodeStatuses"] = nodeStatusesRaw
-		mu.Unlock()
-		if err != nil {
-			errChan <- err
-		}
-	}()
+    g.Go(func() error {
+        helmReleasesRaw, err := getDataWithCache("helm_releases", getHelmReleases, config.GetDuration("cache.helmReleasesTTL"))
+        if err != nil {
+            return fmt.Errorf("failed to get Helm releases: %w", err)
+        }
+        mu.Lock()
+        results["helmReleases"] = helmReleasesRaw
+        mu.Unlock()
+        return nil
+    })
 
-	go func() {
-		defer wg.Done()
-		proxmoxNodesRaw, err := getDataWithCache("proxmox_nodes", func() (interface{}, error) {
-			return getProxmoxNodes()
-		})
-		mu.Lock()
-		results["proxmoxNodes"] = proxmoxNodesRaw
-		mu.Unlock()
-		if err != nil {
-			errChan <- err
-		}
-	}()
+    g.Go(func() error {
+        nodeStatusesRaw, err := getDataWithCache("node_statuses", getNodeStatuses, config.GetDuration("cache.nodeStatusesTTL"))
+        if err != nil {
+            return fmt.Errorf("failed to get node statuses: %w", err)
+        }
+        mu.Lock()
+        results["nodeStatuses"] = nodeStatusesRaw
+        mu.Unlock()
+        return nil
+    })
 
-	go func() {
-		defer wg.Done()
-		podStatusesRaw, err := getDataWithCache("pod_statuses", func() (interface{}, error) {
-			return getPodStatuses()
-		})
-		mu.Lock()
-		results["podStatuses"] = podStatusesRaw
-		mu.Unlock()
-		if err != nil {
-			errChan <- err
-		}
-	}()
+    g.Go(func() error {
+        proxmoxNodesRaw, err := getDataWithCache("proxmox_nodes", getProxmoxNodes, config.GetDuration("cache.proxmoxNodesTTL"))
+        if err != nil {
+            return fmt.Errorf("failed to get Proxmox nodes: %w", err)
+        }
+        mu.Lock()
+        results["proxmoxNodes"] = proxmoxNodesRaw
+        mu.Unlock()
+        return nil
+    })
 
-	wg.Wait()
-	close(errChan)
+    g.Go(func() error {
+        podStatusesRaw, err := getDataWithCache("pod_statuses", getPodStatuses, config.GetDuration("cache.podStatusesTTL"))
+        if err != nil {
+            return fmt.Errorf("failed to get pod statuses: %w", err)
+        }
+        mu.Lock()
+        results["podStatuses"] = podStatusesRaw
+        mu.Unlock()
+        return nil
+    })
 
-	if err := <-errChan; err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+    if err := g.Wait(); err != nil {
+        http.Error(w, fmt.Sprintf("Internal server error: %v", err), http.StatusInternalServerError)
+        return
+    }
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", int(cacheTTL.Seconds())))
-	jsonAPI.NewEncoder(w).Encode(results)
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(results)
 }
 
-func getDataWithCache(cacheKey string, getData func() (interface{}, error)) (interface{}, error) {
-	if !useRedis {
-		return getData()
-	}
+func getDataWithCache(cacheKey string, getData func() (interface{}, error), ttl time.Duration) (interface{}, error) {
+    cachedData, err := redisClient.Get(ctx, cacheKey).Result()
+    if err == nil {
+        var data interface{}
+        err = json.Unmarshal([]byte(cachedData), &data)
+        if err == nil {
+            return data, nil
+        }
+    }
 
-	cachedData, err := redisClient.Get(ctx, cacheKey).Result()
-	if err == nil {
-		var data interface{}
-		err = jsonAPI.Unmarshal([]byte(cachedData), &data)
-		if err == nil {
-			return data, nil
-		}
-	}
+    data, err := getData()
+    if err != nil {
+        return nil, err
+    }
 
-	data, err := getData()
-	if err != nil {
-		return nil, err
-	}
+    cacheData, _ := json.Marshal(data)
+    redisClient.Set(ctx, cacheKey, cacheData, ttl)
 
-	cacheData, _ := jsonAPI.Marshal(data)
-	redisClient.Set(ctx, cacheKey, cacheData, cacheTTL)
-
-	return data, nil
+    return data, nil
 }
 
-func getHelmReleases() ([]HelmRelease, error) {
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		return nil, fmt.Errorf("KUBECONFIG environment variable is not set")
-	}
+func getHelmReleases() (interface{}, error) {
+    // Используем уже инициализированный k8sClient
+    namespaces, err := k8sClient.CoreV1().Namespaces().List(context.TODO(), metav1.ListOptions{})
+    if err != nil {
+        return nil, fmt.Errorf("failed to list namespaces: %w", err)
+    }
 
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build config: %w", err)
-	}
+    var allReleases []HelmRelease
+    var mu sync.Mutex
+    var wg sync.WaitGroup
 
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create clientset: %w", err)
-	}
+    for _, ns := range namespaces.Items {
+        wg.Add(1)
+        go func(namespace string) {
+            defer wg.Done()
+            settings := cli.New()
+            actionConfig := new(action.Configuration)
+            if err := actionConfig.Init(settings.RESTClientGetter(), namespace, os.Getenv("HELM_DRIVER"), log.Printf); err != nil {
+                log.Printf("Failed to initialize action configuration for namespace %s: %v", namespace, err)
+                return
+            }
 
-	namespaces, err := clientset.CoreV1().Namespaces().List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list namespaces: %w", err)
-	}
+            listAction := action.NewList(actionConfig)
+            releases, err := listAction.Run()
+            if err != nil {
+                log.Printf("Failed to list releases in namespace %s: %v", namespace, err)
+                return
+            }
 
-	var allReleases []HelmRelease
+            mu.Lock()
+            defer mu.Unlock()
+            for _, r := range releases {
+                allReleases = append(allReleases, HelmRelease{
+                    Name:      r.Name,
+                    Namespace: r.Namespace,
+                    Chart:     r.Chart.Metadata.Name,
+                    Version:   r.Chart.Metadata.Version,
+                    Status:    r.Info.Status.String(),
+                })
+            }
+        }(ns.Name)
+    }
 
-	for _, ns := range namespaces.Items {
-		settings := cli.New()
-		actionConfig := new(action.Configuration)
-		if err := actionConfig.Init(settings.RESTClientGetter(), ns.Name, os.Getenv("HELM_DRIVER"), log.Printf); err != nil {
-			log.Printf("Failed to initialize action configuration for namespace %s: %v", ns.Name, err)
-			continue
-		}
-
-		listAction := action.NewList(actionConfig)
-		releases, err := listAction.Run()
-		if err != nil {
-			log.Printf("Failed to list releases in namespace %s: %v", ns.Name, err)
-			continue
-		}
-
-		for _, r := range releases {
-			allReleases = append(allReleases, HelmRelease{
-				Name:      r.Name,
-				Namespace: r.Namespace,
-				Chart:     r.Chart.Metadata.Name,
-				Version:   r.Chart.Metadata.Version,
-				Status:    r.Info.Status.String(),
-			})
-		}
-	}
-
-	return allReleases, nil
+    wg.Wait()
+    return allReleases, nil
 }
 
-func getNodeStatuses() ([]NodeStatus, error) {
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		return nil, fmt.Errorf("KUBECONFIG environment variable is not set")
-	}
+func getNodeStatuses() (interface{}, error) {
+    nodes, err := k8sClient.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
+    if err != nil {
+        return nil, fmt.Errorf("failed to list nodes: %w", err)
+    }
 
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build config: %w", err)
-	}
+    var nodeStatuses []NodeStatus
+    for _, node := range nodes.Items {
+        var internalIP string
+        for _, addr := range node.Status.Addresses {
+            if addr.Type == "InternalIP" {
+                internalIP = addr.Address
+                break
+            }
+        }
 
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create clientset: %w", err)
-	}
+        uptime := formatUptime(time.Since(node.CreationTimestamp.Time))
 
-	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list nodes: %w", err)
-	}
+        status := "Unknown"
+        for _, condition := range node.Status.Conditions {
+            if condition.Type == corev1.NodeReady {
+                if condition.Status == corev1.ConditionTrue {
+                    status = "Ready"
+                } else {
+                    status = "NotReady"
+                }
+                break
+            }
+        }
 
-	var nodeStatuses []NodeStatus
-	for _, node := range nodes.Items {
-		var internalIP string
-		for _, addr := range node.Status.Addresses {
-			if addr.Type == "InternalIP" {
-				internalIP = addr.Address
-				break
-			}
-		}
+        nodeStatuses = append(nodeStatuses, NodeStatus{
+            Name:       node.Name,
+            Status:     status,
+            Roles:      getRoles(node.Labels),
+            Version:    node.Status.NodeInfo.KubeletVersion,
+            InternalIP: internalIP,
+            Uptime:     uptime,
+        })
+    }
 
-		uptime := formatUptime(time.Since(node.CreationTimestamp.Time))
-
-		status := "Unknown"
-		for _, condition := range node.Status.Conditions {
-			if condition.Type == corev1.NodeReady {
-				if condition.Status == corev1.ConditionTrue {
-					status = "Ready"
-				} else {
-					status = "NotReady"
-				}
-				break
-			}
-		}
-
-		nodeStatuses = append(nodeStatuses, NodeStatus{
-			Name:       node.Name,
-			Status:     status,
-			Roles:      getRoles(node.Labels),
-			Version:    node.Status.NodeInfo.KubeletVersion,
-			InternalIP: internalIP,
-			Uptime:     uptime,
-		})
-	}
-
-	return nodeStatuses, nil
+    return nodeStatuses, nil
 }
 
-func getRoles(labels map[string]string) []string {
-	var roles []string
-	if _, isControlPlane := labels["node-role.kubernetes.io/control-plane"]; isControlPlane {
-		roles = append(roles, "control-plane")
-	}
-	if _, isMaster := labels["node-role.kubernetes.io/master"]; isMaster {
-		roles = append(roles, "master")
-	}
-	if _, isWorker := labels["node-role.kubernetes.io/worker"]; isWorker {
-		roles = append(roles, "worker")
-	}
-	if len(roles) == 0 {
-		roles = append(roles, "worker") // Assume worker if no specific role is set
-	}
-	return roles
+func getProxmoxNodes() (interface{}, error) {
+    nodeList, err := proxmoxClient.GetNodeList()
+    if err != nil {
+        return nil, fmt.Errorf("failed to get Proxmox nodes: %w", err)
+    }
+
+    var proxmoxNodes []ProxmoxNode
+    for _, node := range nodeList["data"].([]interface{}) {
+        n := node.(map[string]interface{})
+        status := "unknown"
+        if s, ok := n["status"].(string); ok {
+            status = s
+        }
+
+        uptime := "unknown"
+        if u, ok := n["uptime"].(float64); ok {
+            uptime = formatUptime(time.Duration(u) * time.Second)
+        }
+
+        name, _ := n["node"].(string)
+
+        proxmoxNodes = append(proxmoxNodes, ProxmoxNode{
+            Name:   name,
+            Status: status,
+            Uptime: uptime,
+        })
+    }
+
+    return proxmoxNodes, nil
 }
 
-func getProxmoxNodes() ([]ProxmoxNode, error) {
-	proxmoxAPI := os.Getenv("PROXMOX_API_URL")
-	proxmoxUser := os.Getenv("PROXMOX_USER")
-	proxmoxPassword := os.Getenv("PROXMOX_PASSWORD")
+func getPodStatuses() (interface{}, error) {
+    pods, err := k8sClient.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
+    if err != nil {
+        return nil, fmt.Errorf("failed to list pods: %w", err)
+    }
 
-	if proxmoxAPI == "" || proxmoxUser == "" || proxmoxPassword == "" {
-		return nil, fmt.Errorf("Proxmox environment variables are not set")
-	}
+    statuses := PodStatuses{}
+    for _, pod := range pods.Items {
+        switch pod.Status.Phase {
+        case corev1.PodRunning:
+            statuses.Running++
+        case corev1.PodPending:
+            statuses.Pending++
+        case corev1.PodFailed:
+            statuses.Failed++
+        case corev1.PodSucceeded:
+            statuses.Succeeded++
+        default:
+            statuses.Unknown++
+        }
+    }
 
-	tlsConfig := &tls.Config{InsecureSkipVerify: true}
-	client, err := pxapi.NewClient(proxmoxAPI, nil, "", tlsConfig, "", 300)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Proxmox client: %w", err)
-	}
-
-	err = client.Login(proxmoxUser, proxmoxPassword, "")
-	if err != nil {
-		return nil, fmt.Errorf("failed to login to Proxmox: %w", err)
-	}
-
-	nodeList, err := client.GetNodeList()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Proxmox nodes: %w", err)
-	}
-
-	data, ok := nodeList["data"].([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("unexpected node list data type: %T", nodeList["data"])
-	}
-
-	var proxmoxNodes []ProxmoxNode
-	for _, n := range data {
-		node, ok := n.(map[string]interface{})
-		if !ok {
-			log.Printf("Unexpected node type: %T", n)
-			continue
-		}
-
-		status := "unknown"
-		if s, ok := node["status"].(string); ok {
-			status = s
-		}
-
-		uptime := "unknown"
-		if u, ok := node["uptime"].(float64); ok {
-			uptime = formatUptime(time.Duration(u) * time.Second)
-		}
-
-		name, _ := node["node"].(string)
-
-		proxmoxNodes = append(proxmoxNodes, ProxmoxNode{
-			Name:   name,
-			Status: status,
-			Uptime: uptime,
-		})
-	}
-
-	return proxmoxNodes, nil
-}
-
-func getPodStatuses() (PodStatuses, error) {
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		return PodStatuses{}, fmt.Errorf("KUBECONFIG environment variable is not set")
-	}
-
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return PodStatuses{}, fmt.Errorf("failed to build config: %w", err)
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return PodStatuses{}, fmt.Errorf("failed to create clientset: %w", err)
-	}
-
-	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		return PodStatuses{}, fmt.Errorf("failed to list pods: %w", err)
-	}
-
-	statuses := PodStatuses{}
-	for _, pod := range pods.Items {
-		switch pod.Status.Phase {
-		case corev1.PodRunning:
-			statuses.Running++
-		case corev1.PodPending:
-			statuses.Pending++
-		case corev1.PodFailed:
-			statuses.Failed++
-		case corev1.PodSucceeded:
-			statuses.Succeeded++
-		default:
-			statuses.Unknown++
-		}
-	}
-
-	return statuses, nil
+    return statuses, nil
 }
 
 func formatUptime(duration time.Duration) string {
-	days := duration.Hours() / 24
-	return fmt.Sprintf("%.2f days", math.Floor(days*100)/100)
+    days := duration.Hours() / 24
+    return fmt.Sprintf("%.2f days", math.Floor(days*100)/100)
+}
+
+func getRoles(labels map[string]string) []string {
+    var roles []string
+    if _, isControlPlane := labels["node-role.kubernetes.io/control-plane"]; isControlPlane {
+        roles = append(roles, "control-plane")
+    }
+    if _, isMaster := labels["node-role.kubernetes.io/master"]; isMaster {
+        roles = append(roles, "master")
+    }
+    if _, isWorker := labels["node-role.kubernetes.io/worker"]; isWorker {
+        roles = append(roles, "worker")
+    }
+    if len(roles) == 0 {
+        roles = append(roles, "worker") // Assume worker if no specific role is set
+    }
+    return roles
 }
 
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+    // Проверка состояния всех зависимостей
+    if err := checkRedis(); err != nil {
+        http.Error(w, fmt.Sprintf("Redis unhealthy: %v", err), http.StatusServiceUnavailable)
+        return
+    }
+    if err := checkKubernetes(); err != nil {
+        http.Error(w, fmt.Sprintf("Kubernetes unhealthy: %v", err), http.StatusServiceUnavailable)
+        return
+    }
+    if err := checkProxmox(); err != nil {
+        http.Error(w, fmt.Sprintf("Proxmox unhealthy: %v", err), http.StatusServiceUnavailable)
+        return
+    }
+
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte("OK"))
 }
 
 func readyHandler(w http.ResponseWriter, r *http.Request) {
-	if useRedis {
-		// Check Redis connection
-		_, err := redisClient.Ping(ctx).Result()
-		if err != nil {
-			http.Error(w, "Redis connection failed", http.StatusServiceUnavailable)
-			return
-		}
-	}
+    // Проверка готовности приложения к обработке запросов
+    if !isAppReady() {
+        http.Error(w, "Application is not ready", http.StatusServiceUnavailable)
+        return
+    }
 
-	// Add checks for other dependencies here (e.g., Kubernetes API, Proxmox API)
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Ready"))
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte("Ready"))
 }
+
+func checkRedis() error {
+    return redisClient.Ping(ctx).Err()
+}
+
+func checkKubernetes() error {
+    _, err := k8sClient.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{Limit: 1})
+    return err
+}
+
+func checkProxmox() error {
+    _, err := proxmoxClient.GetNodeList()
+    return err
+}
+
+func isAppReady() bool {
+    // Здесь можно добавить дополнительные проверки готовности приложения
+    return checkRedis() == nil && checkKubernetes() == nil && checkProxmox() == nil
+}
+
+// Функция для инвалидации кэша
+func invalidateCache(key string) error {
+    return redisClient.Del(ctx, key).Err()
+}
+
+// Функция для обновления конфигурации без перезапуска
+func updateConfig() {
+    config.WatchConfig()
+    config.OnConfigChange(func(e fsnotify.Event) {
+        log.Println("Config file changed:", e.Name)
+        // Обновление настроек приложения
+        updateRedisConfig()
+        updateKubernetesConfig()
+        updateProxmoxConfig()
+    })
+}
+
+func updateRedisConfig() {
+    // Обновление настроек Redis
+    redisClient.Options().Addr = config.GetString("redis.addr")
+    redisClient.Options().Password = config.GetString("redis.password")
+    redisClient.Options().DB = config.GetInt("redis.db")
+    redisClient.Options().PoolSize = config.GetInt("redis.poolSize")
+}
+
+func updateKubernetesConfig() {
+    // Обновление настроек Kubernetes
+    kubeconfig := config.GetString("kubernetes.config")
+    newConfig, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+    if err != nil {
+        log.Printf("Failed to update Kubernetes config: %v", err)
+        return
+    }
+    newClient, err := kubernetes.NewForConfig(newConfig)
+    if err != nil {
+        log.Printf("Failed to create new Kubernetes client: %v", err)
+        return
+    }
+    k8sClient = newClient
+}
+
+func updateProxmoxConfig() {
+    // Обновление настроек Proxmox
+    tlsConfig := &tls.Config{InsecureSkipVerify: config.GetBool("proxmox.insecureSkipVerify")}
+    newClient, err := pxapi.NewClient(
+        config.GetString("proxmox.apiUrl"),
+        nil,
+        "",
+        tlsConfig,
+        config.GetString("proxmox.taskTimeout"),
+        config.GetInt("proxmox.vsmDomainType"),
+    )
+    if err != nil {
+        log.Printf("Failed to create new Proxmox client: %v", err)
+        return
+    }
+    err = newClient.Login(config.GetString("proxmox.username"), config.GetString("proxmox.password"), "")
+    if err != nil {
+        log.Printf("Failed to login to Proxmox with new config: %v", err)
+        return
+    }
+    proxmoxClient = newClient
+}
+
+// Функция для логирования ошибок с дополнительным контекстом
+func logError(err error, context string) {
+    log.Printf("Error in %s: %v", context, err)
+}
+
+func init() {
+    // Инициализация логгера или других глобальных настроек
+    log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+}
+
+// Главная функция main() уже определена выше

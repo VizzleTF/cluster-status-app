@@ -78,13 +78,11 @@ env:
   - name: KUBECONFIG
     value: /root/.kube/config
   - name: REDIS_HOST
-    value: "cluster-status-app-redis"
+    value: "{{ .Release.Name }}-redis"
   - name: REDIS_PORT
     value: "6379"
   - name: REDIS_ENABLED
     value: "true"
-  - name: REDIS_TTL
-    value: "5"
 
 volumes:
   - name: kubeconfig
@@ -121,3 +119,30 @@ redis:
   master:
     persistence:
       enabled: false
+
+config:
+  server:
+    port: 8080
+    readTimeout: 5s
+    writeTimeout: 10s
+    idleTimeout: 15s
+  redis:
+    poolSize: 100
+  kubernetes:
+    config: "/root/.kube/config"
+  proxmox:
+    insecureSkipVerify: false
+    taskTimeout: "300s"
+    vsmDomainType: 1
+  workerPool:
+    size: 10
+  cache:
+    helmReleasesTTL: 300s
+    nodeStatusesTTL: 60s
+    proxmoxNodesTTL: 120s
+    podStatusesTTL: 30s
+  handler:
+    timeout: 30s
+  logging:
+    level: "info"
+    format: "json"
