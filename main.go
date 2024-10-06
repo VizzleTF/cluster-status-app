@@ -9,6 +9,8 @@ import (
     "math"
     "net/http"
     "os"
+    "strconv"
+    "strings"
     "sync"
     "time"
 
@@ -147,7 +149,7 @@ func initProxmoxClient() {
         nil,
         "",
         tlsConfig,
-        taskTimeout,
+        strconv.Itoa(taskTimeout),
         config.GetInt("proxmox.vsmDomainType"),
     )
     if err != nil {
@@ -552,7 +554,7 @@ func updateProxmoxConfig() {
         nil,
         "",
         tlsConfig,
-        taskTimeout,
+        strconv.Itoa(taskTimeout),
         config.GetInt("proxmox.vsmDomainType"),
     )
     if err != nil {
