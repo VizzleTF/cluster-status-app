@@ -6,6 +6,9 @@ image:
   pullPolicy: Always
   tag: "latest"
 
+namespace: cluster-status
+createNamespace: true
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
