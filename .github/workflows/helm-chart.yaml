@@ -12,7 +12,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Helm lint
-      run: helm lint ./cluster-status
+      run: helm lint ./cluster-status-app
 
   package-and-push:
     needs: lint-and-test
@@ -23,11 +23,11 @@ jobs:
     
     - name: Get chart version
       id: get_version
-      run: echo ::set-output name=CHART_VERSION::$(grep 'version:' ./cluster-status/Chart.yaml | awk '{print $2}')
+      run: echo ::set-output name=CHART_VERSION::$(grep 'version:' ./cluster-status-app/Chart.yaml | awk '{print $2}')
 
     - name: Package Helm chart
       run: |
-        helm package ./cluster-status
+        helm package ./cluster-status-app
 
     - name: Configure Git
       run: |
@@ -39,8 +39,8 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         git checkout gh-pages
-        mv cluster-status-${{ steps.get_version.outputs.CHART_VERSION }}.tgz docs/
-        helm repo index docs --url https://vizzletf.github.io/cluster-status/
+        mv cluster-status-app-${{ steps.get_version.outputs.CHART_VERSION }}.tgz docs/
+        helm repo index docs --url https://vizzletf.github.io/cluster-status-app/
         git add docs
         git commit -m "Release chart version ${{ steps.get_version.outputs.CHART_VERSION }}"
         git push origin gh-pages
