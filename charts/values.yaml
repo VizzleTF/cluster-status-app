@@ -4,7 +4,6 @@ replicaCount: 1
 image:
   repository: ghcr.io/vizzletf/cluster-status-app
   pullPolicy: Always
-  tag: "latest"
 
 imagePullSecrets: []
 nameOverride: ""

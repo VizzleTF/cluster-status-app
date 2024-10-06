@@ -114,6 +114,18 @@ func initConfig() {
     log.Printf("Proxmox Task Timeout: %v", config.GetDuration("proxmox.taskTimeout"))
 }
 
+func parseTimeout(timeoutStr string) (int, error) {
+    timeoutStr = strings.TrimSpace(timeoutStr)
+    if strings.HasSuffix(timeoutStr, "s") {
+        timeoutStr = strings.TrimSuffix(timeoutStr, "s")
+    }
+    timeout, err := strconv.Atoi(timeoutStr)
+    if err != nil {
+        return 0, fmt.Errorf("invalid timeout value: %s", timeoutStr)
+    }
+    return timeout, nil
+}
+
 func initProxmoxClient() {
     tlsConfig := &tls.Config{InsecureSkipVerify: config.GetBool("proxmox.insecureSkipVerify")}
     
@@ -123,13 +135,19 @@ func initProxmoxClient() {
         taskTimeoutStr = config.GetString("proxmox.taskTimeout")
     }
     
-    var err error
+    taskTimeout, err := parseTimeout(taskTimeoutStr)
+    if err != nil {
+        log.Fatalf("Failed to parse Proxmox task timeout: %v", err)
+    }
+    
+    log.Printf("Initializing Proxmox client with task timeout: %d seconds", taskTimeout)
+    
     proxmoxClient, err = pxapi.NewClient(
         config.GetString("proxmox.apiUrl"),
         nil,
         "",
         tlsConfig,
-        taskTimeoutStr,
+        taskTimeout,
         config.GetInt("proxmox.vsmDomainType"),
     )
     if err != nil {
@@ -141,10 +159,8 @@ func initProxmoxClient() {
         log.Fatalf("Failed to login to Proxmox: %v", err)
     }
 
-    log.Printf("Proxmox client initialized with task timeout: %s", taskTimeoutStr)
+    log.Printf("Proxmox client initialized successfully")
 }
-
-
 
 func initRedis() {
     redisClient = redis.NewClient(&redis.Options{
@@ -525,12 +541,18 @@ func updateProxmoxConfig() {
         taskTimeoutStr = config.GetString("proxmox.taskTimeout")
     }
     
+    taskTimeout, err := parseTimeout(taskTimeoutStr)
+    if err != nil {
+        log.Printf("Failed to parse Proxmox task timeout: %v", err)
+        return
+    }
+    
     newClient, err := pxapi.NewClient(
         config.GetString("proxmox.apiUrl"),
         nil,
         "",
         tlsConfig,
-        taskTimeoutStr,
+        taskTimeout,
         config.GetInt("proxmox.vsmDomainType"),
     )
     if err != nil {
@@ -543,7 +565,7 @@ func updateProxmoxConfig() {
         return
     }
     proxmoxClient = newClient
-    log.Printf("Proxmox client updated with task timeout: %s", taskTimeoutStr)
+    log.Printf("Proxmox client updated with task timeout: %d seconds", taskTimeout)
 }
 
 // Функция для логирования ошибок с дополнительным контекстом
