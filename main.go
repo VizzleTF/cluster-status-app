@@ -9,9 +9,11 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	pxapi "github.com/Telmate/proxmox-api-go/proxmox"
+	"github.com/go-redis/redis/v8"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/cli"
 	corev1 "k8s.io/api/core/v1"
@@ -29,12 +31,12 @@ type HelmRelease struct {
 }
 
 type NodeStatus struct {
-    Name       string   `json:"name"`
-    Status     string   `json:"status"`
-    Roles      []string `json:"roles"`
-    Version    string   `json:"version"`
-    InternalIP string   `json:"internalIP"`
-    Uptime     string   `json:"uptime"`
+	Name       string   `json:"name"`
+	Status     string   `json:"status"`
+	Roles      []string `json:"roles"`
+	Version    string   `json:"version"`
+	InternalIP string   `json:"internalIP"`
+	Uptime     string   `json:"uptime"`
 }
 
 type ProxmoxNode struct {
@@ -51,7 +53,16 @@ type PodStatuses struct {
 	Unknown   int `json:"Unknown"`
 }
 
+var (
+	redisClient *redis.Client
+	ctx         = context.Background()
+	useRedis    bool
+	cacheTTL    time.Duration
+)
+
 func main() {
+	initRedis()
+
 	http.HandleFunc("/status", statusHandler)
 	http.HandleFunc("/healthz", healthzHandler)
 	http.HandleFunc("/ready", readyHandler)
@@ -60,26 +71,72 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
+func initRedis() {
+	redisEnabled, _ := strconv.ParseBool(os.Getenv("REDIS_ENABLED"))
+	if !redisEnabled {
+		useRedis = false
+		log.Println("Redis is disabled")
+		return
+	}
+
+	redisHost := os.Getenv("REDIS_HOST")
+	redisPort := os.Getenv("REDIS_PORT")
+	if redisHost == "" || redisPort == "" {
+		log.Println("REDIS_HOST or REDIS_PORT environment variable is not set, disabling Redis")
+		useRedis = false
+		return
+	}
+
+	ttl, err := strconv.Atoi(os.Getenv("REDIS_TTL"))
+	if err != nil {
+		log.Println("Invalid REDIS_TTL, using default of 5 seconds")
+		ttl = 5
+	}
+	cacheTTL = time.Duration(ttl) * time.Second
+
+	redisClient = redis.NewClient(&redis.Options{
+		Addr: fmt.Sprintf("%s:%s", redisHost, redisPort),
+	})
+
+	_, err = redisClient.Ping(ctx).Result()
+	if err != nil {
+		log.Printf("Failed to connect to Redis: %v, disabling Redis", err)
+		useRedis = false
+		return
+	}
+	
+	useRedis = true
+	log.Println("Connected to Redis successfully")
+}
+
 func statusHandler(w http.ResponseWriter, r *http.Request) {
-	helmReleases, err := getHelmReleases()
+	helmReleases, err := getDataWithCache("helm_releases", func() (interface{}, error) {
+		return getHelmReleases()
+	})
 	if err != nil {
 		http.Error(w, "Failed to get Helm releases: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	nodeStatuses, err := getNodeStatuses()
+	nodeStatuses, err := getDataWithCache("node_statuses", func() (interface{}, error) {
+		return getNodeStatuses()
+	})
 	if err != nil {
 		http.Error(w, "Failed to get node statuses: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	proxmoxNodes, err := getProxmoxNodes()
+	proxmoxNodes, err := getDataWithCache("proxmox_nodes", func() (interface{}, error) {
+		return getProxmoxNodes()
+	})
 	if err != nil {
 		http.Error(w, "Failed to get Proxmox nodes: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	podStatuses, err := getPodStatuses()
+	podStatuses, err := getDataWithCache("pod_statuses", func() (interface{}, error) {
+		return getPodStatuses()
+	})
 	if err != nil {
 		http.Error(w, "Failed to get pod statuses: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -91,14 +148,128 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 		ProxmoxNodes []ProxmoxNode `json:"proxmoxNodes"`
 		PodStatuses  PodStatuses   `json:"podStatuses"`
 	}{
-		HelmReleases: helmReleases,
-		NodeStatuses: nodeStatuses,
-		ProxmoxNodes: proxmoxNodes,
-		PodStatuses:  podStatuses,
+		HelmReleases: helmReleases.([]HelmRelease),
+		NodeStatuses: nodeStatuses.([]NodeStatus),
+		ProxmoxNodes: proxmoxNodes.([]ProxmoxNode),
+		PodStatuses:  podStatuses.(PodStatuses),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+func getDataWithCache(cacheKey string, getData func() (interface{}, error)) (interface{}, error) {
+	if !useRedis {
+		return getData()
+	}
+
+	cachedData, err := redisClient.Get(ctx, cacheKey).Result()
+	if err == nil {
+		var data interface{}
+		err = json.Unmarshal([]byte(cachedData), &data)
+		if err == nil {
+			return data, nil
+		}
+	}
+
+	data, err := getData()
+	if err != nil {
+		return nil, err
+	}
+
+	cacheData, _ := json.Marshal(data)
+	redisClient.Set(ctx, cacheKey, cacheData, cacheTTL)
+
+	return data, nil
+}
+
+
+func getCachedHelmReleases() ([]HelmRelease, error) {
+	cacheKey := "helm_releases"
+	cachedData, err := redisClient.Get(ctx, cacheKey).Result()
+	if err == nil {
+		var releases []HelmRelease
+		err = json.Unmarshal([]byte(cachedData), &releases)
+		if err == nil {
+			return releases, nil
+		}
+	}
+
+	releases, err := getHelmReleases()
+	if err != nil {
+		return nil, err
+	}
+
+	cacheData, _ := json.Marshal(releases)
+	redisClient.Set(ctx, cacheKey, cacheData, 5*time.Second)
+
+	return releases, nil
+}
+
+func getCachedNodeStatuses() ([]NodeStatus, error) {
+	cacheKey := "node_statuses"
+	cachedData, err := redisClient.Get(ctx, cacheKey).Result()
+	if err == nil {
+		var statuses []NodeStatus
+		err = json.Unmarshal([]byte(cachedData), &statuses)
+		if err == nil {
+			return statuses, nil
+		}
+	}
+
+	statuses, err := getNodeStatuses()
+	if err != nil {
+		return nil, err
+	}
+
+	cacheData, _ := json.Marshal(statuses)
+	redisClient.Set(ctx, cacheKey, cacheData, 5*time.Second)
+
+	return statuses, nil
+}
+
+func getCachedProxmoxNodes() ([]ProxmoxNode, error) {
+	cacheKey := "proxmox_nodes"
+	cachedData, err := redisClient.Get(ctx, cacheKey).Result()
+	if err == nil {
+		var nodes []ProxmoxNode
+		err = json.Unmarshal([]byte(cachedData), &nodes)
+		if err == nil {
+			return nodes, nil
+		}
+	}
+
+	nodes, err := getProxmoxNodes()
+	if err != nil {
+		return nil, err
+	}
+
+	cacheData, _ := json.Marshal(nodes)
+	redisClient.Set(ctx, cacheKey, cacheData, 5*time.Second)
+
+	return nodes, nil
+}
+
+func getCachedPodStatuses() (PodStatuses, error) {
+	cacheKey := "pod_statuses"
+	cachedData, err := redisClient.Get(ctx, cacheKey).Result()
+	if err == nil {
+		var statuses PodStatuses
+		err = json.Unmarshal([]byte(cachedData), &statuses)
+		if err == nil {
+			return statuses, nil
+		}
+	}
+
+	statuses, err := getPodStatuses()
+	if err != nil {
+		return PodStatuses{}, err
+	}
+
+	cacheData, _ := json.Marshal(statuses)
+	redisClient.Set(ctx, cacheKey, cacheData, 5*time.Second)
+
+	return statuses, nil
 }
 
 func getHelmReleases() ([]HelmRelease, error) {
@@ -174,42 +345,41 @@ func getNodeStatuses() ([]NodeStatus, error) {
 		return nil, fmt.Errorf("failed to list nodes: %w", err)
 	}
 
+	var nodeStatuses []NodeStatus
+	for _, node := range nodes.Items {
+		var internalIP string
+		for _, addr := range node.Status.Addresses {
+			if addr.Type == "InternalIP" {
+				internalIP = addr.Address
+				break
+			}
+		}
 
-    var nodeStatuses []NodeStatus
-    for _, node := range nodes.Items {
-        var internalIP string
-        for _, addr := range node.Status.Addresses {
-            if addr.Type == "InternalIP" {
-                internalIP = addr.Address
-                break
-            }
-        }
+		uptime := formatUptime(time.Since(node.CreationTimestamp.Time))
 
-        uptime := formatUptime(time.Since(node.CreationTimestamp.Time))
+		status := "Unknown"
+		for _, condition := range node.Status.Conditions {
+			if condition.Type == corev1.NodeReady {
+				if condition.Status == corev1.ConditionTrue {
+					status = "Ready"
+				} else {
+					status = "NotReady"
+				}
+				break
+			}
+		}
 
-        status := "Unknown"
-        for _, condition := range node.Status.Conditions {
-            if condition.Type == corev1.NodeReady {
-                if condition.Status == corev1.ConditionTrue {
-                    status = "Ready"
-                } else {
-                    status = "NotReady"
-                }
-                break
-            }
-        }
+		nodeStatuses = append(nodeStatuses, NodeStatus{
+			Name:       node.Name,
+			Status:     status,
+			Roles:      getRoles(node.Labels),
+			Version:    node.Status.NodeInfo.KubeletVersion,
+			InternalIP: internalIP,
+			Uptime:     uptime,
+		})
+	}
 
-        nodeStatuses = append(nodeStatuses, NodeStatus{
-            Name:       node.Name,
-            Status:     status,
-            Roles:      getRoles(node.Labels),
-            Version:    node.Status.NodeInfo.KubeletVersion,
-            InternalIP: internalIP,
-            Uptime:     uptime,
-        })
-    }
-
-    return nodeStatuses, nil
+	return nodeStatuses, nil
 }
 
 func getRoles(labels map[string]string) []string {
@@ -308,30 +478,30 @@ func getPodStatuses() (PodStatuses, error) {
 	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return PodStatuses{}, fmt.Errorf("failed to list pods: %w", err)
-	}
+}
 
-	statuses := PodStatuses{}
-	for _, pod := range pods.Items {
-		switch pod.Status.Phase {
-		case corev1.PodRunning:
-			statuses.Running++
-		case corev1.PodPending:
-			statuses.Pending++
-		case corev1.PodFailed:
-			statuses.Failed++
-		case corev1.PodSucceeded:
-			statuses.Succeeded++
-		default:
-			statuses.Unknown++
-		}
+statuses := PodStatuses{}
+for _, pod := range pods.Items {
+	switch pod.Status.Phase {
+	case corev1.PodRunning:
+		statuses.Running++
+	case corev1.PodPending:
+		statuses.Pending++
+	case corev1.PodFailed:
+		statuses.Failed++
+	case corev1.PodSucceeded:
+		statuses.Succeeded++
+	default:
+		statuses.Unknown++
 	}
+}
 
-	return statuses, nil
+return statuses, nil
 }
 
 func formatUptime(duration time.Duration) string {
-	days := duration.Hours() / 24
-	return fmt.Sprintf("%.2f days", math.Floor(days*100)/100)
+days := duration.Hours() / 24
+return fmt.Sprintf("%.2f days", math.Floor(days*100)/100)
 }
 
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
@@ -340,7 +510,15 @@ func healthzHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func readyHandler(w http.ResponseWriter, r *http.Request) {
-	// место под проверку интеграций
+	if useRedis {
+		// Проверка подключения к Redis
+		_, err := redisClient.Ping(ctx).Result()
+		if err != nil {
+			http.Error(w, "Redis connection failed", http.StatusServiceUnavailable)
+			return
+		}
+	}
+
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Ready"))
 }

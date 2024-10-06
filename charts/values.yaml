@@ -77,6 +77,10 @@ env:
         key: password
   - name: KUBECONFIG
     value: /root/.kube/config
+  - name: REDIS_HOST
+    value: "{{ .Release.Name }}-redis"
+  - name: REDIS_PORT
+    value: "6379"
 
 volumes:
   - name: kubeconfig
@@ -104,3 +108,12 @@ probes:
       port: 8080
     initialDelaySeconds: 5
     periodSeconds: 10
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: false
