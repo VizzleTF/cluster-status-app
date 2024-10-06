@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "cluster-status.fullname" . }}
+  name: {{ include "cluster-status-app.fullname" . }}
   labels:
-    {{- include "cluster-status.labels" . | nindent 4 }}
+    {{- include "cluster-status-app.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "cluster-status.selectorLabels" . | nindent 6 }}
+      {{- include "cluster-status-app.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "cluster-status.selectorLabels" . | nindent 8 }}
+        {{- include "cluster-status-app.selectorLabels" . | nindent 8 }}
     spec:
       containers:
         - name: {{ .Chart.Name }}
