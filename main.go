@@ -3,17 +3,19 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
 	"log"
 	"math"
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	pxapi "github.com/Telmate/proxmox-api-go/proxmox"
 	"github.com/go-redis/redis/v8"
+	jsoniter "github.com/json-iterator/go"
+	"github.com/NYTimes/gziphandler"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/cli"
 	corev1 "k8s.io/api/core/v1"
@@ -58,17 +60,26 @@ var (
 	ctx         = context.Background()
 	useRedis    bool
 	cacheTTL    time.Duration
+	jsonAPI     = jsoniter.ConfigCompatibleWithStandardLibrary
 )
 
 func main() {
 	initRedis()
 
-	http.HandleFunc("/status", statusHandler)
+	http.Handle("/status", gziphandler.GzipHandler(http.HandlerFunc(statusHandler)))
 	http.HandleFunc("/healthz", healthzHandler)
 	http.HandleFunc("/ready", readyHandler)
 	
+	server := &http.Server{
+		Addr:         ":8080",
+		Handler:      nil, // uses http.DefaultServeMux
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  15 * time.Second,
+	}
+
 	log.Println("Server starting on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Fatal(server.ListenAndServe())
 }
 
 func initRedis() {
@@ -89,13 +100,14 @@ func initRedis() {
 
 	ttl, err := strconv.Atoi(os.Getenv("REDIS_TTL"))
 	if err != nil {
-		log.Println("Invalid REDIS_TTL, using default of 5 seconds")
-		ttl = 5
+		log.Println("Invalid REDIS_TTL, using default of 10 seconds")
+		ttl = 10
 	}
 	cacheTTL = time.Duration(ttl) * time.Second
 
 	redisClient = redis.NewClient(&redis.Options{
 		Addr: fmt.Sprintf("%s:%s", redisHost, redisPort),
+		PoolSize: 100, // Adjust this value based on your needs
 	})
 
 	_, err = redisClient.Ping(ctx).Result()
@@ -110,177 +122,75 @@ func initRedis() {
 }
 
 func statusHandler(w http.ResponseWriter, r *http.Request) {
-	helmReleasesRaw, err := getDataWithCache("helm_releases", func() (interface{}, error) {
-		return getHelmReleases()
-	})
-	if err != nil {
-		http.Error(w, "Failed to get Helm releases: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	results := make(map[string]interface{})
+	errChan := make(chan error, 4)
 
-	nodeStatusesRaw, err := getDataWithCache("node_statuses", func() (interface{}, error) {
-		return getNodeStatuses()
-	})
-	if err != nil {
-		http.Error(w, "Failed to get node statuses: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		helmReleasesRaw, err := getDataWithCache("helm_releases", func() (interface{}, error) {
+			return getHelmReleases()
+		})
+		mu.Lock()
+		results["helmReleases"] = helmReleasesRaw
+		mu.Unlock()
+		if err != nil {
+			errChan <- err
+		}
+	}()
 
-	proxmoxNodesRaw, err := getDataWithCache("proxmox_nodes", func() (interface{}, error) {
-		return getProxmoxNodes()
-	})
-	if err != nil {
-		http.Error(w, "Failed to get Proxmox nodes: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	go func() {
+		defer wg.Done()
+		nodeStatusesRaw, err := getDataWithCache("node_statuses", func() (interface{}, error) {
+			return getNodeStatuses()
+		})
+		mu.Lock()
+		results["nodeStatuses"] = nodeStatusesRaw
+		mu.Unlock()
+		if err != nil {
+			errChan <- err
+		}
+	}()
 
-    podStatusesRaw, err := getDataWithCache("pod_statuses", func() (interface{}, error) {
-        return getPodStatuses()
-    })
-    if err != nil {
-        http.Error(w, "Failed to get pod statuses: "+err.Error(), http.StatusInternalServerError)
-        return
-    }
+	go func() {
+		defer wg.Done()
+		proxmoxNodesRaw, err := getDataWithCache("proxmox_nodes", func() (interface{}, error) {
+			return getProxmoxNodes()
+		})
+		mu.Lock()
+		results["proxmoxNodes"] = proxmoxNodesRaw
+		mu.Unlock()
+		if err != nil {
+			errChan <- err
+		}
+	}()
 
-	// Правильное преобразование типов
-	helmReleases, err := convertToHelmReleases(helmReleasesRaw)
-	if err != nil {
-		log.Printf("Failed to convert helmReleasesRaw to []HelmRelease: %v", err)
+	go func() {
+		defer wg.Done()
+		podStatusesRaw, err := getDataWithCache("pod_statuses", func() (interface{}, error) {
+			return getPodStatuses()
+		})
+		mu.Lock()
+		results["podStatuses"] = podStatusesRaw
+		mu.Unlock()
+		if err != nil {
+			errChan <- err
+		}
+	}()
+
+	wg.Wait()
+	close(errChan)
+
+	if err := <-errChan; err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
-	}
-
-	nodeStatuses, err := convertToNodeStatuses(nodeStatusesRaw)
-	if err != nil {
-		log.Printf("Failed to convert nodeStatusesRaw to []NodeStatus: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	proxmoxNodes, err := convertToProxmoxNodes(proxmoxNodesRaw)
-	if err != nil {
-		log.Printf("Failed to convert proxmoxNodesRaw to []ProxmoxNode: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-    podStatuses, err := convertToPodStatuses(podStatusesRaw)
-    if err != nil {
-        log.Printf("Failed to convert podStatusesRaw to PodStatuses: %v", err)
-        http.Error(w, "Internal server error", http.StatusInternalServerError)
-        return
-    }
-
-	response := struct {
-		HelmReleases []HelmRelease `json:"helmReleases"`
-		NodeStatuses []NodeStatus  `json:"nodeStatuses"`
-		ProxmoxNodes []ProxmoxNode `json:"proxmoxNodes"`
-		PodStatuses  PodStatuses   `json:"podStatuses"`
-	}{
-		HelmReleases: helmReleases,
-		NodeStatuses: nodeStatuses,
-		ProxmoxNodes: proxmoxNodes,
-		PodStatuses:  podStatuses,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
-
-func convertToHelmReleases(data interface{}) ([]HelmRelease, error) {
-	switch v := data.(type) {
-	case []HelmRelease:
-		return v, nil
-	case []interface{}:
-		releases := make([]HelmRelease, len(v))
-		for i, item := range v {
-			if m, ok := item.(map[string]interface{}); ok {
-				releases[i] = HelmRelease{
-					Name:      m["name"].(string),
-					Namespace: m["namespace"].(string),
-					Chart:     m["chart"].(string),
-					Version:   m["version"].(string),
-					Status:    m["status"].(string),
-				}
-			} else {
-				return nil, fmt.Errorf("invalid item type at index %d", i)
-			}
-		}
-		return releases, nil
-	default:
-		return nil, fmt.Errorf("unsupported type: %T", data)
-	}
-}
-
-func convertToNodeStatuses(data interface{}) ([]NodeStatus, error) {
-	switch v := data.(type) {
-	case []NodeStatus:
-		return v, nil
-	case []interface{}:
-		statuses := make([]NodeStatus, len(v))
-		for i, item := range v {
-			if m, ok := item.(map[string]interface{}); ok {
-				roles, _ := m["roles"].([]interface{})
-				rolesStr := make([]string, len(roles))
-				for j, role := range roles {
-					rolesStr[j] = role.(string)
-				}
-				statuses[i] = NodeStatus{
-					Name:       m["name"].(string),
-					Status:     m["status"].(string),
-					Roles:      rolesStr,
-					Version:    m["version"].(string),
-					InternalIP: m["internalIP"].(string),
-					Uptime:     m["uptime"].(string),
-				}
-			} else {
-				return nil, fmt.Errorf("invalid item type at index %d", i)
-			}
-		}
-		return statuses, nil
-	default:
-		return nil, fmt.Errorf("unsupported type: %T", data)
-	}
-}
-
-func convertToProxmoxNodes(data interface{}) ([]ProxmoxNode, error) {
-	switch v := data.(type) {
-	case []ProxmoxNode:
-		return v, nil
-	case []interface{}:
-		nodes := make([]ProxmoxNode, len(v))
-		for i, item := range v {
-			if m, ok := item.(map[string]interface{}); ok {
-				nodes[i] = ProxmoxNode{
-					Name:   m["name"].(string),
-					Status: m["status"].(string),
-					Uptime: m["uptime"].(string),
-				}
-			} else {
-				return nil, fmt.Errorf("invalid item type at index %d", i)
-			}
-		}
-		return nodes, nil
-	default:
-		return nil, fmt.Errorf("unsupported type: %T", data)
-	}
-}
-
-func convertToPodStatuses(data interface{}) (PodStatuses, error) {
-    switch v := data.(type) {
-    case map[string]interface{}:
-        return PodStatuses{
-            Running:   int(v["Running"].(float64)),
-            Pending:   int(v["Pending"].(float64)),
-            Failed:    int(v["Failed"].(float64)),
-            Succeeded: int(v["Succeeded"].(float64)),
-            Unknown:   int(v["Unknown"].(float64)),
-        }, nil
-    case PodStatuses:
-        return v, nil
-    default:
-        return PodStatuses{}, fmt.Errorf("unsupported type: %T", data)
-    }
+	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", int(cacheTTL.Seconds())))
+	jsonAPI.NewEncoder(w).Encode(results)
 }
 
 func getDataWithCache(cacheKey string, getData func() (interface{}, error)) (interface{}, error) {
@@ -291,7 +201,7 @@ func getDataWithCache(cacheKey string, getData func() (interface{}, error)) (int
 	cachedData, err := redisClient.Get(ctx, cacheKey).Result()
 	if err == nil {
 		var data interface{}
-		err = json.Unmarshal([]byte(cachedData), &data)
+		err = jsonAPI.Unmarshal([]byte(cachedData), &data)
 		if err == nil {
 			return data, nil
 		}
@@ -302,99 +212,10 @@ func getDataWithCache(cacheKey string, getData func() (interface{}, error)) (int
 		return nil, err
 	}
 
-	cacheData, _ := json.Marshal(data)
+	cacheData, _ := jsonAPI.Marshal(data)
 	redisClient.Set(ctx, cacheKey, cacheData, cacheTTL)
 
 	return data, nil
-}
-
-
-func getCachedHelmReleases() ([]HelmRelease, error) {
-	cacheKey := "helm_releases"
-	cachedData, err := redisClient.Get(ctx, cacheKey).Result()
-	if err == nil {
-		var releases []HelmRelease
-		err = json.Unmarshal([]byte(cachedData), &releases)
-		if err == nil {
-			return releases, nil
-		}
-	}
-
-	releases, err := getHelmReleases()
-	if err != nil {
-		return nil, err
-	}
-
-	cacheData, _ := json.Marshal(releases)
-	redisClient.Set(ctx, cacheKey, cacheData, 5*time.Second)
-
-	return releases, nil
-}
-
-func getCachedNodeStatuses() ([]NodeStatus, error) {
-	cacheKey := "node_statuses"
-	cachedData, err := redisClient.Get(ctx, cacheKey).Result()
-	if err == nil {
-		var statuses []NodeStatus
-		err = json.Unmarshal([]byte(cachedData), &statuses)
-		if err == nil {
-			return statuses, nil
-		}
-	}
-
-	statuses, err := getNodeStatuses()
-	if err != nil {
-		return nil, err
-	}
-
-	cacheData, _ := json.Marshal(statuses)
-	redisClient.Set(ctx, cacheKey, cacheData, 5*time.Second)
-
-	return statuses, nil
-}
-
-func getCachedProxmoxNodes() ([]ProxmoxNode, error) {
-	cacheKey := "proxmox_nodes"
-	cachedData, err := redisClient.Get(ctx, cacheKey).Result()
-	if err == nil {
-		var nodes []ProxmoxNode
-		err = json.Unmarshal([]byte(cachedData), &nodes)
-		if err == nil {
-			return nodes, nil
-		}
-	}
-
-	nodes, err := getProxmoxNodes()
-	if err != nil {
-		return nil, err
-	}
-
-	cacheData, _ := json.Marshal(nodes)
-	redisClient.Set(ctx, cacheKey, cacheData, 5*time.Second)
-
-	return nodes, nil
-}
-
-func getCachedPodStatuses() (PodStatuses, error) {
-	cacheKey := "pod_statuses"
-	cachedData, err := redisClient.Get(ctx, cacheKey).Result()
-	if err == nil {
-		var statuses PodStatuses
-		err = json.Unmarshal([]byte(cachedData), &statuses)
-		if err == nil {
-			return statuses, nil
-		}
-	}
-
-	statuses, err := getPodStatuses()
-	if err != nil {
-		return PodStatuses{}, err
-	}
-
-	cacheData, _ := json.Marshal(statuses)
-	redisClient.Set(ctx, cacheKey, cacheData, 5*time.Second)
-
-	return statuses, nil
 }
 
 func getHelmReleases() ([]HelmRelease, error) {
@@ -603,30 +424,30 @@ func getPodStatuses() (PodStatuses, error) {
 	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return PodStatuses{}, fmt.Errorf("failed to list pods: %w", err)
-}
-
-statuses := PodStatuses{}
-for _, pod := range pods.Items {
-	switch pod.Status.Phase {
-	case corev1.PodRunning:
-		statuses.Running++
-	case corev1.PodPending:
-		statuses.Pending++
-	case corev1.PodFailed:
-		statuses.Failed++
-	case corev1.PodSucceeded:
-		statuses.Succeeded++
-	default:
-		statuses.Unknown++
 	}
-}
 
-return statuses, nil
+	statuses := PodStatuses{}
+	for _, pod := range pods.Items {
+		switch pod.Status.Phase {
+		case corev1.PodRunning:
+			statuses.Running++
+		case corev1.PodPending:
+			statuses.Pending++
+		case corev1.PodFailed:
+			statuses.Failed++
+		case corev1.PodSucceeded:
+			statuses.Succeeded++
+		default:
+			statuses.Unknown++
+		}
+	}
+
+	return statuses, nil
 }
 
 func formatUptime(duration time.Duration) string {
-days := duration.Hours() / 24
-return fmt.Sprintf("%.2f days", math.Floor(days*100)/100)
+	days := duration.Hours() / 24
+	return fmt.Sprintf("%.2f days", math.Floor(days*100)/100)
 }
 
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
@@ -636,13 +457,15 @@ func healthzHandler(w http.ResponseWriter, r *http.Request) {
 
 func readyHandler(w http.ResponseWriter, r *http.Request) {
 	if useRedis {
-		// Проверка подключения к Redis
+		// Check Redis connection
 		_, err := redisClient.Ping(ctx).Result()
 		if err != nil {
 			http.Error(w, "Redis connection failed", http.StatusServiceUnavailable)
 			return
 		}
 	}
+
+	// Add checks for other dependencies here (e.g., Kubernetes API, Proxmox API)
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Ready"))
