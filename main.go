@@ -143,23 +143,23 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Правильное преобразование типов
-	helmReleases, ok := helmReleasesRaw.([]HelmRelease)
-	if !ok {
-		log.Printf("Failed to convert helmReleasesRaw to []HelmRelease: %v", helmReleasesRaw)
+	helmReleases, err := convertToHelmReleases(helmReleasesRaw)
+	if err != nil {
+		log.Printf("Failed to convert helmReleasesRaw to []HelmRelease: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	nodeStatuses, ok := nodeStatusesRaw.([]NodeStatus)
-	if !ok {
-		log.Printf("Failed to convert nodeStatusesRaw to []NodeStatus: %v", nodeStatusesRaw)
+	nodeStatuses, err := convertToNodeStatuses(nodeStatusesRaw)
+	if err != nil {
+		log.Printf("Failed to convert nodeStatusesRaw to []NodeStatus: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	proxmoxNodes, ok := proxmoxNodesRaw.([]ProxmoxNode)
-	if !ok {
-		log.Printf("Failed to convert proxmoxNodesRaw to []ProxmoxNode: %v", proxmoxNodesRaw)
+	proxmoxNodes, err := convertToProxmoxNodes(proxmoxNodesRaw)
+	if err != nil {
+		log.Printf("Failed to convert proxmoxNodesRaw to []ProxmoxNode: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -185,6 +185,85 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+func convertToHelmReleases(data interface{}) ([]HelmRelease, error) {
+	switch v := data.(type) {
+	case []HelmRelease:
+		return v, nil
+	case []interface{}:
+		releases := make([]HelmRelease, len(v))
+		for i, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				releases[i] = HelmRelease{
+					Name:      m["name"].(string),
+					Namespace: m["namespace"].(string),
+					Chart:     m["chart"].(string),
+					Version:   m["version"].(string),
+					Status:    m["status"].(string),
+				}
+			} else {
+				return nil, fmt.Errorf("invalid item type at index %d", i)
+			}
+		}
+		return releases, nil
+	default:
+		return nil, fmt.Errorf("unsupported type: %T", data)
+	}
+}
+
+func convertToNodeStatuses(data interface{}) ([]NodeStatus, error) {
+	switch v := data.(type) {
+	case []NodeStatus:
+		return v, nil
+	case []interface{}:
+		statuses := make([]NodeStatus, len(v))
+		for i, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				roles, _ := m["roles"].([]interface{})
+				rolesStr := make([]string, len(roles))
+				for j, role := range roles {
+					rolesStr[j] = role.(string)
+				}
+				statuses[i] = NodeStatus{
+					Name:       m["name"].(string),
+					Status:     m["status"].(string),
+					Roles:      rolesStr,
+					Version:    m["version"].(string),
+					InternalIP: m["internalIP"].(string),
+					Uptime:     m["uptime"].(string),
+				}
+			} else {
+				return nil, fmt.Errorf("invalid item type at index %d", i)
+			}
+		}
+		return statuses, nil
+	default:
+		return nil, fmt.Errorf("unsupported type: %T", data)
+	}
+}
+
+func convertToProxmoxNodes(data interface{}) ([]ProxmoxNode, error) {
+	switch v := data.(type) {
+	case []ProxmoxNode:
+		return v, nil
+	case []interface{}:
+		nodes := make([]ProxmoxNode, len(v))
+		for i, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				nodes[i] = ProxmoxNode{
+					Name:   m["name"].(string),
+					Status: m["status"].(string),
+					Uptime: m["uptime"].(string),
+				}
+			} else {
+				return nil, fmt.Errorf("invalid item type at index %d", i)
+			}
+		}
+		return nodes, nil
+	default:
+		return nil, fmt.Errorf("unsupported type: %T", data)
+	}
 }
 
 func getDataWithCache(cacheKey string, getData func() (interface{}, error)) (interface{}, error) {
