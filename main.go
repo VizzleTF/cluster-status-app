@@ -22,7 +22,9 @@ import (
     corev1 "k8s.io/api/core/v1"
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/rest"
     "k8s.io/client-go/tools/clientcmd"
+    "k8s.io/client-go/util/flowcontrol"
 )
 
 type HelmRelease struct {
@@ -158,12 +160,26 @@ func initRedis() {
 
 func initKubernetesClient() {
     kubeconfig := config.GetString("kubernetes.config")
-    config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+    var err error
+    var k8sConfig *rest.Config
+
+    if kubeconfig != "" {
+        k8sConfig, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+    } else {
+        k8sConfig, err = rest.InClusterConfig()
+    }
+
     if err != nil {
         log.Fatalf("Failed to build Kubernetes config: %v", err)
     }
 
-    k8sClient, err = kubernetes.NewForConfig(config)
+    // Настройка ограничения скорости запросов
+    k8sConfig.RateLimiter = flowcontrol.NewTokenBucketRateLimiter(10, 20)
+
+    // Увеличение тайм-аутов
+    k8sConfig.Timeout = 30 * time.Second
+
+    k8sClient, err = kubernetes.NewForConfig(k8sConfig)
     if err != nil {
         log.Fatalf("Failed to create Kubernetes client: %v", err)
     }
@@ -255,8 +271,10 @@ func getDataWithCache(cacheKey string, getData func() (interface{}, error), ttl 
 }
 
 func getHelmReleases() (interface{}, error) {
-    // Используем уже инициализированный k8sClient
-    namespaces, err := k8sClient.CoreV1().Namespaces().List(context.TODO(), metav1.ListOptions{})
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    namespaces, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
     if err != nil {
         return nil, fmt.Errorf("failed to list namespaces: %w", err)
     }
@@ -264,11 +282,15 @@ func getHelmReleases() (interface{}, error) {
     var allReleases []HelmRelease
     var mu sync.Mutex
     var wg sync.WaitGroup
+    semaphore := make(chan struct{}, 5) // Ограничение одновременных запросов
 
     for _, ns := range namespaces.Items {
         wg.Add(1)
         go func(namespace string) {
             defer wg.Done()
+            semaphore <- struct{}{} // Захват семафора
+            defer func() { <-semaphore }() // Освобождение семафора
+
             settings := cli.New()
             actionConfig := new(action.Configuration)
             if err := actionConfig.Init(settings.RESTClientGetter(), namespace, os.Getenv("HELM_DRIVER"), log.Printf); err != nil {
@@ -302,7 +324,10 @@ func getHelmReleases() (interface{}, error) {
 }
 
 func getNodeStatuses() (interface{}, error) {
-    nodes, err := k8sClient.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    nodes, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
     if err != nil {
         return nil, fmt.Errorf("failed to list nodes: %w", err)
     }
