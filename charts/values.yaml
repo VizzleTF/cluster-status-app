@@ -81,6 +81,10 @@ env:
     value: "cluster-status-app-redis"
   - name: REDIS_PORT
     value: "6379"
+  - name: REDIS_ENABLED
+    value: "true"
+  - name: REDIS_TTL
+    value: "5"
 
 volumes:
   - name: kubeconfig

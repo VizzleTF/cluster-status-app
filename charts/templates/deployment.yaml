@@ -30,5 +30,9 @@ spec:
             {{- toYaml .Values.probes.liveness | nindent 12 }}
           readinessProbe:
             {{- toYaml .Values.probes.readiness | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
       volumes:
         {{- toYaml .Values.volumes | nindent 8 }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}

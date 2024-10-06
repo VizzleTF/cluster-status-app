@@ -57,6 +57,11 @@ jobs:
       run: |
         echo "APP_VERSION=$(grep '^appVersion:' charts/Chart.yaml | cut -d ' ' -f 2)" >> $GITHUB_ENV
 
+    - name: Convert IMAGE_NAME to lowercase
+      id: image_name_lowercase
+      run: |
+        echo "IMAGE_NAME_LOWERCASE=$(echo ${{ env.IMAGE_NAME }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
     - name: Build and push Docker image
       uses: docker/build-push-action@v6
       with:
@@ -64,5 +69,5 @@ jobs:
         push: true
         tags: |
           ${{ steps.meta.outputs.tags }}
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWERCASE }}:${{ env.APP_VERSION }}
         labels: ${{ steps.meta.outputs.labels }}
