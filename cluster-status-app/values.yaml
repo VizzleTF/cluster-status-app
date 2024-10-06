@@ -76,10 +76,20 @@ env:
         name: proxmox-credentials
         key: password
   - name: KUBECONFIG
-    valueFrom:
-      secretKeyRef:
-        name: kubeconfig
-        key: config
+    value: /root/.kube/config
+
+volumes:
+  - name: kubeconfig
+    secret:
+      secretName: kubeconfig
+      items:
+        - key: config
+          path: config
+
+volumeMounts:
+  - name: kubeconfig
+    mountPath: /root/.kube
+    readOnly: true
 
 probes:
   liveness:
