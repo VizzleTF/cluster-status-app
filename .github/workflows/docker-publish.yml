@@ -64,5 +64,5 @@ jobs:
         push: true
         tags: |
           ${{ steps.meta.outputs.tags }}
-          ${{ env.APP_VERSION }}
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
         labels: ${{ steps.meta.outputs.labels }}
