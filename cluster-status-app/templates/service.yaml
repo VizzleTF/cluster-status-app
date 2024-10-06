@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "cluster-status-app.fullname" . }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ include "cluster-status-app.namespaceName" . }}
   labels:
     {{- include "cluster-status-app.labels" . | nindent 4 }}
 spec:
