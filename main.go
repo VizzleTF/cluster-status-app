@@ -110,7 +110,7 @@ func initRedis() {
 }
 
 func statusHandler(w http.ResponseWriter, r *http.Request) {
-	helmReleases, err := getDataWithCache("helm_releases", func() (interface{}, error) {
+	helmReleasesRaw, err := getDataWithCache("helm_releases", func() (interface{}, error) {
 		return getHelmReleases()
 	})
 	if err != nil {
@@ -118,7 +118,7 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodeStatuses, err := getDataWithCache("node_statuses", func() (interface{}, error) {
+	nodeStatusesRaw, err := getDataWithCache("node_statuses", func() (interface{}, error) {
 		return getNodeStatuses()
 	})
 	if err != nil {
@@ -126,7 +126,7 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proxmoxNodes, err := getDataWithCache("proxmox_nodes", func() (interface{}, error) {
+	proxmoxNodesRaw, err := getDataWithCache("proxmox_nodes", func() (interface{}, error) {
 		return getProxmoxNodes()
 	})
 	if err != nil {
@@ -134,11 +134,40 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	podStatuses, err := getDataWithCache("pod_statuses", func() (interface{}, error) {
+	podStatusesRaw, err := getDataWithCache("pod_statuses", func() (interface{}, error) {
 		return getPodStatuses()
 	})
 	if err != nil {
 		http.Error(w, "Failed to get pod statuses: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Правильное преобразование типов
+	helmReleases, ok := helmReleasesRaw.([]HelmRelease)
+	if !ok {
+		log.Printf("Failed to convert helmReleasesRaw to []HelmRelease: %v", helmReleasesRaw)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	nodeStatuses, ok := nodeStatusesRaw.([]NodeStatus)
+	if !ok {
+		log.Printf("Failed to convert nodeStatusesRaw to []NodeStatus: %v", nodeStatusesRaw)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	proxmoxNodes, ok := proxmoxNodesRaw.([]ProxmoxNode)
+	if !ok {
+		log.Printf("Failed to convert proxmoxNodesRaw to []ProxmoxNode: %v", proxmoxNodesRaw)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	podStatuses, ok := podStatusesRaw.(PodStatuses)
+	if !ok {
+		log.Printf("Failed to convert podStatusesRaw to PodStatuses: %v", podStatusesRaw)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -148,10 +177,10 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 		ProxmoxNodes []ProxmoxNode `json:"proxmoxNodes"`
 		PodStatuses  PodStatuses   `json:"podStatuses"`
 	}{
-		HelmReleases: helmReleases.([]HelmRelease),
-		NodeStatuses: nodeStatuses.([]NodeStatus),
-		ProxmoxNodes: proxmoxNodes.([]ProxmoxNode),
-		PodStatuses:  podStatuses.(PodStatuses),
+		HelmReleases: helmReleases,
+		NodeStatuses: nodeStatuses,
+		ProxmoxNodes: proxmoxNodes,
+		PodStatuses:  podStatuses,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -78,7 +78,7 @@ env:
   - name: KUBECONFIG
     value: /root/.kube/config
   - name: REDIS_HOST
-    value: "{{ .Release.Name }}-redis"
+    value: "cluster-status-app-redis"
   - name: REDIS_PORT
     value: "6379"
 
