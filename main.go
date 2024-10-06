@@ -1,3 +1,5 @@
+package main
+
 import (
     "context"
     "crypto/tls"
@@ -110,18 +112,6 @@ func initConfig() {
     log.Printf("Proxmox Username: %s", config.GetString("proxmox.username"))
     log.Printf("Proxmox InsecureSkipVerify: %v", config.GetBool("proxmox.insecureSkipVerify"))
     log.Printf("Proxmox Task Timeout: %v", config.GetDuration("proxmox.taskTimeout"))
-}
-
-func parseTimeout(timeoutStr string) (int, error) {
-    timeoutStr = strings.TrimSpace(timeoutStr)
-    if strings.HasSuffix(timeoutStr, "s") {
-        timeoutStr = strings.TrimSuffix(timeoutStr, "s")
-    }
-    timeout, err := strconv.Atoi(timeoutStr)
-    if err != nil {
-        return 0, fmt.Errorf("invalid timeout value: %s", timeoutStr)
-    }
-    return timeout, nil
 }
 
 func initProxmoxClient() {
