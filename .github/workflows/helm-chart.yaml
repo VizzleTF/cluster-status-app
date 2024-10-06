@@ -1,0 +1,46 @@
+name: Helm Chart CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Helm lint
+      run: helm lint ./cluster-status
+
+  package-and-push:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Get chart version
+      id: get_version
+      run: echo ::set-output name=CHART_VERSION::$(grep 'version:' ./cluster-status/Chart.yaml | awk '{print $2}')
+
+    - name: Package Helm chart
+      run: |
+        helm package ./cluster-status
+
+    - name: Configure Git
+      run: |
+        git config user.name "$GITHUB_ACTOR"
+        git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+    
+    - name: Push to Chart Repository
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        git checkout gh-pages
+        mv cluster-status-${{ steps.get_version.outputs.CHART_VERSION }}.tgz docs/
+        helm repo index docs --url https://vizzletf.github.io/cluster-status/
+        git add docs
+        git commit -m "Release chart version ${{ steps.get_version.outputs.CHART_VERSION }}"
+        git push origin gh-pages

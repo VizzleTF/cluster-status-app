@@ -29,12 +29,12 @@ type HelmRelease struct {
 }
 
 type NodeStatus struct {
-	Name       string   `json:"name"`
-	Status     string   `json:"status"`
-	Roles      []string `json:"roles"`
-	Version    string   `json:"version"`
-	InternalIP string   `json:"internalIP"`
-	Uptime     string   `json:"uptime"`
+    Name       string   `json:"name"`
+    Status     string   `json:"status"`
+    Roles      []string `json:"roles"`
+    Version    string   `json:"version"`
+    InternalIP string   `json:"internalIP"`
+    Uptime     string   `json:"uptime"`
 }
 
 type ProxmoxNode struct {
@@ -174,29 +174,42 @@ func getNodeStatuses() ([]NodeStatus, error) {
 		return nil, fmt.Errorf("failed to list nodes: %w", err)
 	}
 
-	var nodeStatuses []NodeStatus
-	for _, node := range nodes.Items {
-		var internalIP string
-		for _, addr := range node.Status.Addresses {
-			if addr.Type == "InternalIP" {
-				internalIP = addr.Address
-				break
-			}
-		}
 
-		uptime := formatUptime(time.Since(node.CreationTimestamp.Time))
+    var nodeStatuses []NodeStatus
+    for _, node := range nodes.Items {
+        var internalIP string
+        for _, addr := range node.Status.Addresses {
+            if addr.Type == "InternalIP" {
+                internalIP = addr.Address
+                break
+            }
+        }
 
-		nodeStatuses = append(nodeStatuses, NodeStatus{
-			Name:       node.Name,
-			Status:     string(node.Status.Phase),
-			Roles:      getRoles(node.Labels),
-			Version:    node.Status.NodeInfo.KubeletVersion,
-			InternalIP: internalIP,
-			Uptime:     uptime,
-		})
-	}
+        uptime := formatUptime(time.Since(node.CreationTimestamp.Time))
 
-	return nodeStatuses, nil
+        status := "Unknown"
+        for _, condition := range node.Status.Conditions {
+            if condition.Type == corev1.NodeReady {
+                if condition.Status == corev1.ConditionTrue {
+                    status = "Ready"
+                } else {
+                    status = "NotReady"
+                }
+                break
+            }
+        }
+
+        nodeStatuses = append(nodeStatuses, NodeStatus{
+            Name:       node.Name,
+            Status:     status,
+            Roles:      getRoles(node.Labels),
+            Version:    node.Status.NodeInfo.KubeletVersion,
+            InternalIP: internalIP,
+            Uptime:     uptime,
+        })
+    }
+
+    return nodeStatuses, nil
 }
 
 func getRoles(labels map[string]string) []string {
