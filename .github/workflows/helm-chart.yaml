@@ -2,9 +2,13 @@ name: Helm Chart CI/CD
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
+    paths:
+      - 'charts/Chart.yaml'
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main ]
+    paths:
+      - 'charts/Chart.yaml'
 
 jobs:
   lint-and-test:
@@ -12,7 +16,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Helm lint
-      run: helm lint ./cluster-status-app
+      run: helm lint ./charts
 
   package-and-push:
     needs: lint-and-test
@@ -23,11 +27,11 @@ jobs:
     
     - name: Get chart version
       id: get_version
-      run: echo ::set-output name=CHART_VERSION::$(grep 'version:' ./cluster-status-app/Chart.yaml | awk '{print $2}')
+      run: echo ::set-output name=CHART_VERSION::$(grep 'version:' ./charts/Chart.yaml | awk '{print $2}')
 
     - name: Package Helm chart
       run: |
-        helm package ./cluster-status-app
+        helm package ./charts
 
     - name: Configure Git
       run: |
