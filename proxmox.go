@@ -5,6 +5,7 @@ import (
     "fmt"
     "log"
     "time"
+    "strings"
 
     pxapi "github.com/Telmate/proxmox-api-go/proxmox"
 )
@@ -32,13 +33,38 @@ func initProxmoxClient() {
         log.Fatalf("Failed to login to Proxmox: %v", err)
     }
 
+    go func() {
+        for {
+            err := proxmoxClient.Login(config.GetString("proxmox.username"), config.GetString("proxmox.password"), "")
+            if err != nil {
+                log.Printf("Failed to login to Proxmox: %v", err)
+            } else {
+                log.Println("Successfully logged in to Proxmox")
+            }
+            time.Sleep(15 * time.Minute)
+        }
+    }()
+    
     log.Println("Proxmox client initialized successfully")
 }
 
 func getProxmoxNodes() ([]ProxmoxNode, error) {
     nodeList, err := proxmoxClient.GetNodeList()
     if err != nil {
-        return nil, fmt.Errorf("failed to get Proxmox nodes: %w", err)
+        if strings.Contains(err.Error(), "permission denied") {
+            // Попытка повторной аутентификации
+            loginErr := proxmoxClient.Login(config.GetString("proxmox.username"), config.GetString("proxmox.password"), "")
+            if loginErr != nil {
+                return nil, fmt.Errorf("failed to re-authenticate with Proxmox: %w", loginErr)
+            }
+            // Повторная попытка получения списка узлов
+            nodeList, err = proxmoxClient.GetNodeList()
+            if err != nil {
+                return nil, fmt.Errorf("failed to get Proxmox nodes after re-authentication: %w", err)
+            }
+        } else {
+            return nil, fmt.Errorf("failed to get Proxmox nodes: %w", err)
+        }
     }
 
     var proxmoxNodes []ProxmoxNode

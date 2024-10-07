@@ -118,6 +118,13 @@ redis:
   master:
     persistence:
       enabled: false
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "768Mi"
+      cpu: "500m"
 
 config:
   server:
