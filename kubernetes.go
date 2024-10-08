@@ -39,12 +39,11 @@ func initKubernetesClient() {
     }
 }
 
-func getWorkloadsForRelease(ctx context.Context, releaseName, namespace string) ([]WorkloadInfo, error) {
-    labelSelector := fmt.Sprintf("app.kubernetes.io/instance=%s", releaseName)
+func getWorkloadsForRelease(ctx context.Context, namespace string) ([]WorkloadInfo, error) {
     var workloads []WorkloadInfo
 
     // Get Deployments
-    deployments, err := k8sClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+    deployments, err := k8sClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
     if err != nil {
         return nil, fmt.Errorf("failed to list deployments: %w", err)
     }
@@ -59,7 +58,7 @@ func getWorkloadsForRelease(ctx context.Context, releaseName, namespace string) 
     }
 
     // Get StatefulSets
-    statefulSets, err := k8sClient.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+    statefulSets, err := k8sClient.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{})
     if err != nil {
         return nil, fmt.Errorf("failed to list statefulsets: %w", err)
     }
@@ -74,7 +73,7 @@ func getWorkloadsForRelease(ctx context.Context, releaseName, namespace string) 
     }
 
     // Get DaemonSets
-    daemonSets, err := k8sClient.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+    daemonSets, err := k8sClient.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{})
     if err != nil {
         return nil, fmt.Errorf("failed to list daemonsets: %w", err)
     }
@@ -116,13 +115,13 @@ func getHelmReleases() ([]HelmRelease, error) {
             continue
         }
 
-        for _, r := range releases {
-            workloads, err := getWorkloadsForRelease(ctx, r.Name, r.Namespace)
-            if err != nil {
-                log.Printf("Failed to get workloads for release %s in namespace %s: %v", r.Name, r.Namespace, err)
-                workloads = []WorkloadInfo{} // Используем пустой слайс в случае ошибки
-            }
+        workloads, err := getWorkloadsForRelease(ctx, ns.Name)
+        if err != nil {
+            log.Printf("Failed to get workloads for namespace %s: %v", ns.Name, err)
+            workloads = []WorkloadInfo{} // Используем пустой слайс в случае ошибки
+        }
 
+        for _, r := range releases {
             allReleases = append(allReleases, HelmRelease{
                 Name:      r.Name,
                 Namespace: r.Namespace,
