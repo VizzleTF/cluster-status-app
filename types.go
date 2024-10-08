@@ -1,17 +1,20 @@
 package main
 
-type HelmRelease struct {
-    Name      string     `json:"name"`
-    Namespace string     `json:"namespace"`
-    Chart     string     `json:"chart"`
-    Version   string     `json:"version"`
-    Status    string     `json:"status"`
-    Pods      []PodInfo  `json:"pods"`
+type WorkloadInfo struct {
+    Name      string `json:"name"`
+    Kind      string `json:"kind"`
+    Ready     string `json:"ready"`
+    UpToDate  int32  `json:"upToDate"`
+    Available int32  `json:"available"`
 }
 
-type PodInfo struct {
-    Name     string `json:"name"`
-    Replicas int32  `json:"replicas"`
+type HelmRelease struct {
+    Name       string         `json:"name"`
+    Namespace  string         `json:"namespace"`
+    Chart      string         `json:"chart"`
+    Version    string         `json:"version"`
+    Status     string         `json:"status"`
+    Workloads  []WorkloadInfo `json:"workloads"`
 }
 
 type NodeStatus struct {

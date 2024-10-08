@@ -39,6 +39,58 @@ func initKubernetesClient() {
     }
 }
 
+func getWorkloadsForRelease(ctx context.Context, releaseName, namespace string) ([]WorkloadInfo, error) {
+    labelSelector := fmt.Sprintf("app.kubernetes.io/instance=%s", releaseName)
+    var workloads []WorkloadInfo
+
+    // Get Deployments
+    deployments, err := k8sClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+    if err != nil {
+        return nil, fmt.Errorf("failed to list deployments: %w", err)
+    }
+    for _, d := range deployments.Items {
+        workloads = append(workloads, WorkloadInfo{
+            Name:      d.Name,
+            Kind:      "Deployment",
+            Ready:     fmt.Sprintf("%d/%d", d.Status.ReadyReplicas, d.Status.Replicas),
+            UpToDate:  d.Status.UpdatedReplicas,
+            Available: d.Status.AvailableReplicas,
+        })
+    }
+
+    // Get StatefulSets
+    statefulSets, err := k8sClient.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+    if err != nil {
+        return nil, fmt.Errorf("failed to list statefulsets: %w", err)
+    }
+    for _, s := range statefulSets.Items {
+        workloads = append(workloads, WorkloadInfo{
+            Name:      s.Name,
+            Kind:      "StatefulSet",
+            Ready:     fmt.Sprintf("%d/%d", s.Status.ReadyReplicas, s.Status.Replicas),
+            UpToDate:  s.Status.UpdatedReplicas,
+            Available: s.Status.CurrentReplicas,
+        })
+    }
+
+    // Get DaemonSets
+    daemonSets, err := k8sClient.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+    if err != nil {
+        return nil, fmt.Errorf("failed to list daemonsets: %w", err)
+    }
+    for _, ds := range daemonSets.Items {
+        workloads = append(workloads, WorkloadInfo{
+            Name:      ds.Name,
+            Kind:      "DaemonSet",
+            Ready:     fmt.Sprintf("%d/%d", ds.Status.NumberReady, ds.Status.DesiredNumberScheduled),
+            UpToDate:  ds.Status.UpdatedNumberScheduled,
+            Available: ds.Status.NumberAvailable,
+        })
+    }
+
+    return workloads, nil
+}
+
 func getHelmReleases() ([]HelmRelease, error) {
     ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
@@ -65,12 +117,19 @@ func getHelmReleases() ([]HelmRelease, error) {
         }
 
         for _, r := range releases {
+            workloads, err := getWorkloadsForRelease(ctx, r.Name, r.Namespace)
+            if err != nil {
+                log.Printf("Failed to get workloads for release %s in namespace %s: %v", r.Name, r.Namespace, err)
+                workloads = []WorkloadInfo{} // Используем пустой слайс в случае ошибки
+            }
+
             allReleases = append(allReleases, HelmRelease{
                 Name:      r.Name,
                 Namespace: r.Namespace,
                 Chart:     r.Chart.Metadata.Name,
                 Version:   r.Chart.Metadata.Version,
                 Status:    r.Info.Status.String(),
+                Workloads: workloads,
             })
         }
     }
