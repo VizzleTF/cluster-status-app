@@ -20,7 +20,25 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
         }
         
         var data interface{}
-        err = json.Unmarshal([]byte(cachedData), &data)
+        switch key {
+        case "helm_releases":
+            var helmReleases []HelmRelease
+            err = json.Unmarshal([]byte(cachedData), &helmReleases)
+            data = helmReleases
+        case "node_statuses":
+            var nodeStatuses []NodeStatus
+            err = json.Unmarshal([]byte(cachedData), &nodeStatuses)
+            data = nodeStatuses
+        case "proxmox_nodes":
+            var proxmoxNodes []ProxmoxNode
+            err = json.Unmarshal([]byte(cachedData), &proxmoxNodes)
+            data = proxmoxNodes
+        case "pod_statuses":
+            var podStatuses PodStatuses
+            err = json.Unmarshal([]byte(cachedData), &podStatuses)
+            data = podStatuses
+        }
+        
         if err != nil {
             http.Error(w, fmt.Sprintf("Failed to unmarshal %s: %v", key, err), http.StatusInternalServerError)
             return

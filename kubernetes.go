@@ -13,9 +13,13 @@ import (
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     "k8s.io/client-go/kubernetes"
     "k8s.io/client-go/tools/clientcmd"
+    "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
-var k8sClient *kubernetes.Clientset
+var (
+    k8sClient    *kubernetes.Clientset
+    metricsClient *versioned.Clientset
+)
 
 func initKubernetesClient() {
     kubeconfig := config.GetString("kubernetes.config")
@@ -27,6 +31,11 @@ func initKubernetesClient() {
     k8sClient, err = kubernetes.NewForConfig(config)
     if err != nil {
         log.Fatalf("Failed to create Kubernetes client: %v", err)
+    }
+
+    metricsClient, err = versioned.NewForConfig(config)
+    if err != nil {
+        log.Fatalf("Failed to create Kubernetes metrics client: %v", err)
     }
 }
 
@@ -78,6 +87,11 @@ func getNodeStatuses() ([]NodeStatus, error) {
         return nil, fmt.Errorf("failed to list nodes: %w", err)
     }
 
+    nodeMetrics, err := metricsClient.MetricsV1beta1().NodeMetricses().List(ctx, metav1.ListOptions{})
+    if err != nil {
+        return nil, fmt.Errorf("failed to get node metrics: %w", err)
+    }
+
     var nodeStatuses []NodeStatus
     for _, node := range nodes.Items {
         var internalIP string
@@ -100,14 +114,36 @@ func getNodeStatuses() ([]NodeStatus, error) {
             }
         }
 
-        nodeStatuses = append(nodeStatuses, NodeStatus{
+        cpuCapacity := node.Status.Capacity.Cpu().MilliValue()
+        memoryCapacity := node.Status.Capacity.Memory().Value()
+        storageCapacity := node.Status.Capacity.StorageEphemeral().Value()
+
+        cpuUsage := int64(0)
+        memoryUsage := int64(0)
+        for _, metric := range nodeMetrics.Items {
+            if metric.Name == node.Name {
+                cpuUsage = metric.Usage.Cpu().MilliValue()
+                memoryUsage = metric.Usage.Memory().Value()
+                break
+            }
+        }
+
+        nodeStatus := NodeStatus{
             Name:       node.Name,
             Status:     status,
             Roles:      getRoles(node.Labels),
             Version:    node.Status.NodeInfo.KubeletVersion,
             InternalIP: internalIP,
-            Uptime:     formatUptime(time.Since(node.CreationTimestamp.Time)),
-        })
+            Age:        formatUptime(time.Since(node.CreationTimestamp.Time)),
+            CPUUsage:   cpuUsage,
+            CPULimit:   cpuCapacity,
+            MemoryUsage: memoryUsage,
+            MemoryLimit: memoryCapacity,
+            StorageUsage: node.Status.Allocatable.StorageEphemeral().Value(),
+            StorageLimit: storageCapacity,
+        }
+
+        nodeStatuses = append(nodeStatuses, nodeStatus)
     }
 
     return nodeStatuses, nil

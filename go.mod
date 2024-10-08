@@ -4,9 +4,11 @@ go 1.22.6
 
 require (
 	github.com/NYTimes/gziphandler v1.1.1
+	github.com/spf13/viper v1.19.0
 	helm.sh/helm/v3 v3.16.1
 	k8s.io/apimachinery v0.31.1
 	k8s.io/client-go v0.31.1
+	k8s.io/metrics v0.31.0
 )
 
 require (
@@ -22,7 +24,6 @@ require (
 	github.com/sagikazarmark/slog-shim v0.1.0 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.11.0 // indirect
-	github.com/spf13/viper v1.19.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
